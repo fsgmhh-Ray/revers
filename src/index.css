@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-900 text-slate-200 antialiased;
+    background-image:
+      radial-gradient(900px 500px at 12% -8%, rgba(124, 92, 255, 0.16), transparent 60%),
+      radial-gradient(700px 420px at 92% 0%, rgba(34, 211, 238, 0.1), transparent 55%);
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    @apply bg-brand/40 text-white;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-ink-500;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-400;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-white/5 bg-ink-800/70 shadow-card backdrop-blur-xl;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium
+      transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand text-white hover:bg-brand-deep active:scale-[.98] shadow-glow;
+  }
+
+  .btn-ghost {
+    @apply btn border border-white/10 bg-white/[.03] text-slate-300 hover:border-white/20 hover:bg-white/[.07] hover:text-white active:scale-[.98];
+  }
+
+  .btn-danger {
+    @apply btn border border-rose-500/25 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-lg px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide;
+  }
+
+  .field {
+    @apply w-full rounded-xl border border-white/10 bg-ink-700/70 px-3 py-2 text-sm text-slate-100
+      placeholder:text-slate-500 focus:border-brand/60 focus:outline-none focus:ring-2 focus:ring-brand/25;
+  }
+}
+
+.progress-track {
+  @apply h-1.5 w-full overflow-hidden rounded-full bg-ink-600;
+}
+.progress-bar {
+  @apply h-full rounded-full bg-gradient-to-r from-brand to-reel transition-[width] duration-200;
+}

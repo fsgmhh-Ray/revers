@@ -1,0 +1,12 @@
+# 复制为 .dev.vars（本地 wrangler）或 .env.local（npm run dev）后填写
+# 两者都不会提交到 Git
+
+# 自建解析内核（Docker: 见 parser-core/README）
+COBALT_INSTANCE_URL=http://localhost:9000
+COBALT_API_KEY=
+
+# TikTok 免费兜底源
+TIKWM_API_URL=https://www.tikwm.com/api/
+
+# UI 联调演示模式（无需任何后端即可跑通解析/下载链路）
+MOCK_PARSER=1

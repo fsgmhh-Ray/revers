@@ -1,0 +1,14 @@
+services:
+  parser-core:
+    build: .
+    image: cineflowing/parser-core:0.1.0
+    container_name: parser-core
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      PORT: 9000
+      # 建议设置一个密钥，并在 Cloudflare Pages 环境变量配置同样的 COBALT_API_KEY
+      API_KEY: ${API_KEY:-}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
+      CACHE_TTL: 300

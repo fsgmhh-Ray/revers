@@ -1,0 +1,38 @@
+{
+  "name": "reverse-cineflowing",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "reverse.cineflowing.com - 爆款短剧反向工程工坊：多平台无水印解析 + 批量下载 + 分镜逆向",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "build:only": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "pages:dev": "wrangler pages dev -- npm run dev",
+    "deploy": "npm run build && wrangler pages deploy dist --project-name=reverse-cineflowing",
+    "core:dev": "node parser-core/src/server.js"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "@types/node": "^22.20.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "jszip": "^3.10.1",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "wrangler": "^3.90.0"
+  }
+}

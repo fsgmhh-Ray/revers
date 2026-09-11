@@ -1,0 +1,11 @@
+{
+  "name": "parser-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "自建视频解析内核（yt-dlp），以 Cobalt 兼容协议对外提供服务",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  }
+}
