@@ -21,4 +21,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('cineflow:download-progress', listener);
     return () => ipcRenderer.removeListener('cineflow:download-progress', listener);
   },
+  // 运营投放（升级 / 广告 / 推广）+ 主站连接状态
+  fetchFeed: () => ipcRenderer.invoke('cineflow:feed'),
+  feedState: () => ipcRenderer.invoke('cineflow:feed-state'),
+  onFeed: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('cineflow:feed', listener);
+    return () => ipcRenderer.removeListener('cineflow:feed', listener);
+  },
+  onConnection: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('cineflow:connection', listener);
+    return () => ipcRenderer.removeListener('cineflow:connection', listener);
+  },
 });

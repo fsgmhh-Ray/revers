@@ -1,5 +1,6 @@
 import { IconExternal, IconFilm, IconSettings } from './Icons';
 import { EngineBadge } from './EngineBadge';
+import { ConnectionDot } from './ClientFeed';
 import type { EngineState } from '../hooks/useEngine';
 
 export interface GatewayHealth {
@@ -55,6 +56,7 @@ export function Header({
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <ConnectionDot />
           <EngineBadge state={engine} />
 
           <div className="hidden items-center gap-2 rounded-xl border border-white/5 bg-white/[.03] px-2.5 py-1.5 md:flex">

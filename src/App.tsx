@@ -7,6 +7,7 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { StoryboardDrawer } from './components/StoryboardDrawer';
 import { Toaster, useToasts } from './components/Toaster';
 import { EnginePromo } from './components/EngineBadge';
+import { ClientFeed } from './components/ClientFeed';
 import { useEngine } from './hooks/useEngine';
 import { useSettings } from './hooks/useSettings';
 import { useTaskManager } from './hooks/useTaskManager';
@@ -68,6 +69,7 @@ export default function App() {
       <Header health={health} engine={engineState} onOpenSettings={() => setSettingsOpen(true)} />
 
       <main className="mx-auto max-w-[1400px] space-y-4 px-5 py-5">
+        <ClientFeed />
         <EnginePromo state={engineState} />
 
         <UrlBatchInput

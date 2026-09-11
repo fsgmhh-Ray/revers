@@ -391,7 +391,85 @@ ipcMain.handle('cineflow:pick-dir', async () => {
   return res.canceled ? null : res.filePaths[0];
 });
 
-app.whenReady().then(createWindow);
+/* ------------------------------------------------------------------ */
+/* 主站长连接：心跳拉取 feed（升级 / 广告 / 推广）+ 连接状态            */
+/* ------------------------------------------------------------------ */
+
+const FEED_URL = `${APP_URL}/api/client-feed`;
+const feedState = { latest: null, interval: 45_000, timer: null, lastSync: 0, online: false };
+
+async function fetchFeedRemote() {
+  const u = new URL(FEED_URL);
+  u.searchParams.set('v', VERSION);
+  const res = await fetch(u.toString(), { cache: 'no-store' });
+  if (!res.ok) throw new Error(`feed HTTP ${res.status}`);
+  return res.json();
+}
+
+function broadcastFeed(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('cineflow:feed', payload);
+  }
+}
+
+function broadcastConnection(online) {
+  feedState.online = online;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('cineflow:connection', { online, at: Date.now() });
+  }
+}
+
+async function heartbeat() {
+  try {
+    const data = await fetchFeedRemote();
+    feedState.latest = data;
+    feedState.lastSync = Date.now();
+    if (data?.heartbeatIntervalSec) {
+      feedState.interval = Math.max(15, data.heartbeatIntervalSec) * 1000;
+    }
+    broadcastFeed(data);
+    broadcastConnection(true);
+  } catch {
+    broadcastConnection(false);
+  }
+}
+
+function startHeartbeat() {
+  if (feedState.timer) clearInterval(feedState.timer);
+  heartbeat();
+  feedState.timer = setInterval(heartbeat, feedState.interval);
+}
+
+ipcMain.handle('cineflow:feed', async () => {
+  if (feedState.latest) return feedState.latest;
+  try {
+    const data = await fetchFeedRemote();
+    feedState.latest = data;
+    feedState.lastSync = Date.now();
+    return data;
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('cineflow:feed-state', async () => ({
+  online: feedState.online,
+  lastSync: feedState.lastSync,
+  interval: feedState.interval,
+}));
+
+// 跟随系统网络状态变化
+try {
+  app.on('online', () => broadcastConnection(true));
+  app.on('offline', () => broadcastConnection(false));
+} catch {
+  /* 部分 Electron 版本未暴露该事件，忽略即可 */
+}
+
+app.whenReady().then(() => {
+  createWindow();
+  startHeartbeat();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

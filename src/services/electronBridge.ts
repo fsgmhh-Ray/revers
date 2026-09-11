@@ -7,6 +7,7 @@
  */
 
 import type { PlatformType, VideoMetadata } from '../types/parser';
+import type { ClientFeed, ConnectionState, FeedState } from '../types/clientFeed';
 import type { DownloadRequest, Engine, EngineCapabilities, ParseRequest } from './types';
 import { EngineError } from './types';
 
@@ -41,6 +42,11 @@ export interface ElectronAPI {
   cancel(payload: { id: string }): Promise<void>;
   reveal(payload: { path: string }): Promise<void>;
   onDownloadProgress(handler: ElectronProgressHandler): () => void;
+  /** 运营投放（升级 / 广告 / 推广）拉取与订阅 */
+  fetchFeed(): Promise<ClientFeed | null>;
+  feedState(): Promise<FeedState>;
+  onFeed(handler: (feed: ClientFeed) => void): () => void;
+  onConnection(handler: (state: ConnectionState) => void): () => void;
 }
 
 declare global {
