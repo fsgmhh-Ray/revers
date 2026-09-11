@@ -33,10 +33,32 @@
 Cloudflare 边缘回源拉取会被判 403。`proxy-download` 会先尝试边缘直连，失败自动回退到
 内核的 `/api/fetch` 由 VPS 代拉（对 `googlevideo.com`、`fbcdn.net`、`douyinvod.com` 等域名默认直接走源站）。
 
+### 1.1 三擎分发（Progressive Matrix Architecture）
+
+服务端解析的天花板是**机房 IP 被风控**。因此解析与下载按能力分三层，
+页面启动时自动嗅探，取第一个就绪的引擎，业务代码全程只面对同一个 `Engine` 接口：
+
+| 优先级 | 引擎 | 出口 IP | 登录态 | 最高画质 | 分发门槛 |
+| --- | - | --- | --- | --- | --- |
+| 1 | **桌面端** `desktop/`（Electron + yt-dlp） | 用户本机 | `--cookies-from-browser` 直读 | 1080p+ 音视频合并 | 免安装/安装包 |
+| 2 | **浏览器插件** `extension/`（MV3） | 用户本机 | 浏览器现成 Cookie | 720p 左右 | Chrome 商店审核 |
+| 3 | **云端内核** `parser-core/`（VPS） | 机房 IP | 需导出 cookies.txt | 取决于直链 | 无 |
+
+```
+                     ┌─ window.CINEFLOW_RUNTIME === 'electron' ?  →  electronBridge (IPC)
+页面点击「解析」──►  ├─ <html data-cineflow-extension> ?           →  extensionBridge (postMessage)
+  resolveEngine()    └─ 否则                                        →  cloudBridge (fetch /api/parse)
+```
+
+相关源码：`src/services/engineRouter.ts`（路由）、`src/services/types.ts`（`Engine` 契约）、
+`src/hooks/useEngine.ts`（React 状态）、`src/components/EngineBadge.tsx`（状态胶囊 + 升级引导）。
+
 ## 2. 目录结构
 
 ```
 .
+├── extension/                       # Chrome MV3 插件（用户本机 IP 解析 + downloads 落盘）
+├── desktop/                         # Electron 桌面端（内置 yt-dlp + FFmpeg）
 ├── functions/                       # Cloudflare Pages Functions（边缘网关）
 │   ├── _lib/
 │   │   ├── types.ts                 # Env / ApiContext 契约
@@ -51,9 +73,11 @@ Cloudflare 边缘回源拉取会被判 403。`proxy-download` 会先尝试边缘
 │   └── docker-compose.yml
 ├── src/
 │   ├── components/                  # Header / UrlBatchInput / Toolbar / VideoPreviewCard / ...
+│   ├── services/                    # 三擎分发：types / engineRouter / *_Bridge
 │   ├── hooks/
 │   │   ├── useTaskManager.ts        # 任务队列调度状态机（解析 + 下载并发控制）
-│   │   └── useSettings.ts           # 本地偏好（并发数、ZIP、文件名规则）
+│   │   ├── useEngine.ts             # 引擎探测与就绪状态
+│   │   └── useSettings.ts           # 本地偏好（引擎、并发数、ZIP、文件名规则）
 │   ├── types/                       # parser.ts / storyboard.ts（Stage 2 契约）
 │   └── utils/                       # platform.ts / downloader.ts / id.ts
 ├── vite-plugin-dev-api.ts           # 本地复用 functions/ 的 Vite 中间件（单一代码源）
@@ -132,6 +156,25 @@ npx wrangler login
 npm run deploy
 ```
 
+## 6.1 三擎的本地运行
+
+**浏览器插件**（最快的解风控手段）
+
+```bash
+# chrome://extensions 开启开发者模式 → 加载已解压的扩展程序 → 选择 extension/
+# 打开站点后顶部胶囊显示「浏览器插件」即生效
+```
+
+**桌面端**（能力最完整，含 Stage 2 本地抽帧算力）
+
+```bash
+cd desktop
+npm install
+npm run binaries      # 拉取 yt-dlp + FFmpeg 到 desktop/bin/
+npm start             # 或 REVERSE_URL=http://localhost:5173 npm start 联调本地前端
+npm run dist          # 打包 win / mac / linux 安装包
+```
+
 ## 7. 已验证（冒烟）
 
 - [x] `tsc --noEmit` 类型检查通过、`vite build` 构建通过
@@ -142,6 +185,8 @@ npm run deploy
 - [x] `/api/proxy-download` Range 请求 `206` + `Content-Range`
 - [x] SSRF 防护：非白名单地址（含 `169.254.169.254`）返回 `403`
 - [x] 边缘直连失败时自动回退内核 `/api/fetch` 代拉
+- [x] 三擎路由：无插件 / 非桌面端环境下正确回落云端；`Engine` 接口对业务层透明
+- [x] 插件与桌面端全部源文件语法校验通过（含 manifest JSON 解析）
 
 ## 8. Roadmap
 

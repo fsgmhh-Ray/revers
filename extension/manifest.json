@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Cineflowing Reverse 助手",
+  "version": "0.1.0",
+  "description": "为 reverse.cineflowing.com 提供本机 IP 的视频解析与下载通道，绕开机房 IP 风控，无需导出 Cookie。",
+  "permissions": ["downloads", "cookies"],
+  "host_permissions": [
+    "*://*.youtube.com/*",
+    "*://*.youtu.be/*",
+    "*://*.instagram.com/*",
+    "*://*.tiktok.com/*",
+    "*://*.tikwm.com/*",
+    "*://*.googlevideo.com/*",
+    "*://*.tiktokcdn.com/*",
+    "*://*.tiktokcdn-us.com/*",
+    "*://*.muscdn.com/*",
+    "*://*.cdninstagram.com/*",
+    "*://*.fbcdn.net/*",
+    "*://reverse.cineflowing.com/*",
+    "http://localhost:*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://reverse.cineflowing.com/*", "http://localhost:*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_title": "Cineflowing Reverse 助手",
+    "default_popup": "popup.html"
+  }
+}

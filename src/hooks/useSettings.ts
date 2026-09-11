@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { EnginePreference } from '../services/engineRouter';
 
 export type FilenamePattern = 'platform_author_title' | 'title' | 'id';
 
@@ -8,6 +9,10 @@ export interface Settings {
   autoDownload: boolean;
   preferZip: boolean;
   filenamePattern: FilenamePattern;
+  /** 解析/下载链路的执行引擎，auto 时按 桌面端 > 插件 > 云端 嗅探 */
+  engine: EnginePreference;
+  /** 桌面端读取哪个浏览器的登录态（chrome / edge / firefox …），auto 由 yt-dlp 自行尝试 */
+  cookieBrowser: string;
 }
 
 const STORAGE_KEY = 'reverse-cineflowing:settings';
@@ -18,6 +23,8 @@ const DEFAULTS: Settings = {
   autoDownload: false,
   preferZip: false,
   filenamePattern: 'platform_author_title',
+  engine: 'auto',
+  cookieBrowser: 'auto',
 };
 
 function read(): Settings {

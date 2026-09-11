@@ -1,0 +1,24 @@
+{
+  "name": "cineflowing-reverse-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "reverse.cineflowing.com 桌面端：本机 IP 解析 + 内置 yt-dlp/FFmpeg",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "binaries": "node scripts/fetch-binaries.js",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.cineflowing.reverse",
+    "productName": "Cineflowing Reverse",
+    "files": ["main.js", "preload.js", "bin/**"],
+    "win": { "target": "nsis" },
+    "mac": { "target": "dmg" },
+    "linux": { "target": "AppImage" }
+  }
+}

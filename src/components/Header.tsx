@@ -1,4 +1,6 @@
 import { IconExternal, IconFilm, IconSettings } from './Icons';
+import { EngineBadge } from './EngineBadge';
+import type { EngineState } from '../hooks/useEngine';
 
 export interface GatewayHealth {
   ok: boolean;
@@ -22,9 +24,11 @@ const MAIN_SITE = 'https://cineflowing.com';
 
 export function Header({
   health,
+  engine,
   onOpenSettings,
 }: {
   health: GatewayHealth | null;
+  engine: EngineState;
   onOpenSettings: () => void;
 }) {
   const active = health?.providers
@@ -51,6 +55,8 @@ export function Header({
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <EngineBadge state={engine} />
+
           <div className="hidden items-center gap-2 rounded-xl border border-white/5 bg-white/[.03] px-2.5 py-1.5 md:flex">
             <span
               className={`h-1.5 w-1.5 rounded-full ${health?.ok ? 'bg-emerald-400' : 'bg-slate-600'} ${

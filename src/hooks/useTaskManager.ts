@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import type { ParseResponse, TaskItem } from '../types/parser';
+import type { TaskItem } from '../types/parser';
 import {
-  downloadSingleVideo,
   downloadWithConcurrencyLimit,
   packAndDownloadZip,
   runPool,
@@ -9,17 +8,26 @@ import {
 } from '../utils/downloader';
 import { detectPlatform, extractUrls, sanitizeFilename } from '../utils/platform';
 import { uid } from '../utils/id';
+import type { EngineState } from './useEngine';
 import type { Settings } from './useSettings';
 
 export type Notify = (message: string, type?: 'info' | 'success' | 'error') => void;
 
-export function useTaskManager(settings: Settings, notify: Notify = () => {}) {
+export function useTaskManager(
+  settings: Settings,
+  notify: Notify = () => {},
+  engineState?: EngineState,
+) {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [isParsing, setIsParsing] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const engineRef = useRef(engineState?.engine ?? null);
+  engineRef.current = engineState?.engine ?? null;
+  const engineKindRef = useRef(engineState?.active ?? 'cloud');
+  engineKindRef.current = engineState?.active ?? 'cloud';
   const abortRef = useRef<AbortController | null>(null);
 
   const updateTask = useCallback((id: string, patch: Partial<TaskItem>) => {
@@ -49,18 +57,18 @@ export function useTaskManager(settings: Settings, notify: Notify = () => {}) {
   const parseTask = useCallback(
     async (task: TaskItem) => {
       updateTask(task.id, { parseStatus: 'parsing', errorMsg: undefined });
+      const engine = engineRef.current;
+      if (!engine) {
+        updateTask(task.id, { parseStatus: 'error', errorMsg: '执行引擎尚未就绪' });
+        return false;
+      }
       try {
-        const res = await fetch('/api/parse', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: task.inputUrl }),
+        const data = await engine.parse({
+          url: task.inputUrl,
+          platform: detectPlatform(task.inputUrl),
           signal: ensureController().signal,
         });
-        const payload = (await res.json()) as ParseResponse;
-        if (!res.ok || !payload.success || !payload.data) {
-          throw new Error(payload.error || `解析失败 (HTTP ${res.status})`);
-        }
-        updateTask(task.id, { parseStatus: 'success', data: payload.data, errorMsg: undefined });
+        updateTask(task.id, { parseStatus: 'success', data, errorMsg: undefined });
         return true;
       } catch (err: any) {
         if (err?.name === 'AbortError') {
@@ -146,16 +154,32 @@ export function useTaskManager(settings: Settings, notify: Notify = () => {}) {
     async (id: string) => {
       const task = tasks.find((t) => t.id === id);
       if (!task?.data?.downloadUrl) return;
-      updateTask(id, { downloadStatus: 'downloading', progress: 0 });
+      const engine = engineRef.current;
+      if (!engine) {
+        notify('执行引擎尚未就绪', 'error');
+        return;
+      }
+      updateTask(id, { downloadStatus: 'downloading', progress: 0, errorMsg: undefined });
       try {
-        await downloadSingleVideo(task.data.downloadUrl, filenameFor(task), {
+        await engine.download({
+          taskId: id,
+          url: task.data.downloadUrl,
+          filename: filenameFor(task),
+          referer: task.data.originalUrl,
+          metadata: task.data,
+          cookieBrowser: settingsRef.current.cookieBrowser,
           onProgress: (percent) => updateTask(id, { progress: percent }),
           signal: ensureController().signal,
         });
         updateTask(id, { downloadStatus: 'completed', progress: 100 });
+        notify(`${task.data.title || '视频'} 已保存`, 'success');
       } catch (err: any) {
+        if (err?.name === 'AbortError') {
+          updateTask(id, { downloadStatus: 'pending', progress: 0 });
+          return;
+        }
         updateTask(id, { downloadStatus: 'failed', errorMsg: err?.message || '下载失败' });
-        notify(`${task.data.title || '视频'} 下载失败`, 'error');
+        notify(`${task.data.title || '视频'} 下载失败：${err?.message || ''}`.trim(), 'error');
       }
     },
     [ensureController, filenameFor, notify, tasks, updateTask],
@@ -178,10 +202,37 @@ export function useTaskManager(settings: Settings, notify: Notify = () => {}) {
 
     setIsDownloading(true);
     const controller = ensureController();
-    const pool: PoolTask[] = queue.map((t) => ({ url: t.data!.downloadUrl, filename: filenameFor(t) }));
+    const engine = engineRef.current;
     queue.forEach((t) => updateTask(t.id, { downloadStatus: 'downloading', progress: 0 }));
 
     try {
+      if (engine && engineKindRef.current !== 'cloud') {
+        // 桌面端 / 插件链路：由原生下载器接管，支持大文件与断点续传
+        await runPool(queue, settingsRef.current.downloadConcurrency, async (task) => {
+          try {
+            await engine.download({
+              taskId: task.id,
+              url: task.data!.downloadUrl,
+              filename: filenameFor(task),
+              referer: task.data!.originalUrl,
+              metadata: task.data!,
+              cookieBrowser: settingsRef.current.cookieBrowser,
+              onProgress: (percent) => updateTask(task.id, { progress: percent }),
+              signal: controller.signal,
+            });
+            updateTask(task.id, { downloadStatus: 'completed', progress: 100 });
+          } catch (err: any) {
+            updateTask(task.id, {
+              downloadStatus: 'failed',
+              errorMsg: err?.message || '下载失败',
+            });
+          }
+        });
+        notify('批量下载完成', 'success');
+        return;
+      }
+
+      const pool: PoolTask[] = queue.map((t) => ({ url: t.data!.downloadUrl, filename: filenameFor(t) }));
       if (settingsRef.current.preferZip && pool.length > 1) {
         await packAndDownloadZip(
           pool,

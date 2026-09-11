@@ -6,6 +6,8 @@ import { TaskQueueList } from './components/TaskQueueList';
 import { SettingsPanel } from './components/SettingsPanel';
 import { StoryboardDrawer } from './components/StoryboardDrawer';
 import { Toaster, useToasts } from './components/Toaster';
+import { EnginePromo } from './components/EngineBadge';
+import { useEngine } from './hooks/useEngine';
 import { useSettings } from './hooks/useSettings';
 import { useTaskManager } from './hooks/useTaskManager';
 import type { TaskItem } from './types/parser';
@@ -15,6 +17,7 @@ const MAIN_SITE_IMPORT = 'https://cineflowing.com/import';
 export default function App() {
   const { settings, update, reset } = useSettings();
   const { toasts, push, remove } = useToasts();
+  const engineState = useEngine(settings.engine);
   const {
     tasks,
     isParsing,
@@ -27,7 +30,7 @@ export default function App() {
     downloadOne,
     downloadAll,
     cancel,
-  } = useTaskManager(settings, push);
+  } = useTaskManager(settings, push, engineState);
 
   const [health, setHealth] = useState<GatewayHealth | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -62,9 +65,11 @@ export default function App() {
 
   return (
     <div className="min-h-full">
-      <Header health={health} onOpenSettings={() => setSettingsOpen(true)} />
+      <Header health={health} engine={engineState} onOpenSettings={() => setSettingsOpen(true)} />
 
       <main className="mx-auto max-w-[1400px] space-y-4 px-5 py-5">
+        <EnginePromo state={engineState} />
+
         <UrlBatchInput onSubmit={(text) => void addUrls(text)} isParsing={isParsing} />
 
         <Toolbar
@@ -99,14 +104,15 @@ export default function App() {
         </footer>
       </main>
 
-      <SettingsPanel
-        open={settingsOpen}
-        settings={settings}
-        health={health}
-        onClose={() => setSettingsOpen(false)}
-        onChange={update}
-        onReset={reset}
-      />
+        <SettingsPanel
+          open={settingsOpen}
+          settings={settings}
+          health={health}
+          engine={engineState}
+          onClose={() => setSettingsOpen(false)}
+          onChange={update}
+          onReset={reset}
+        />
 
       <StoryboardDrawer task={activeTask} onClose={() => setActiveTask(null)} onPush={handlePush} />
       <Toaster toasts={toasts} onRemove={remove} />

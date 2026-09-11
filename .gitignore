@@ -2,6 +2,9 @@ node_modules
 dist
 .functions
 .wrangler
+desktop/bin
+desktop/release
+parser-core/cookies.txt
 .env
 .env.local
 .env.*.local
