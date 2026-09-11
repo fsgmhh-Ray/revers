@@ -63,6 +63,30 @@ desktop/
    chrome → edge → brave → firefox → vivaldi 的顺序挑一个本机已安装的。
 3. **下载目录固定** `~/Downloads/Cineflowing`，避免与浏览器下载混在一起。
 
+## 客户粘性：主站长连接 + 运营投放
+
+桌面端启动后会以 `heartbeatIntervalSec`（默认 45s，服务端可调控）为周期向
+`https://reverse.cineflowing.com/api/client-feed` 发起心跳，并广播：
+
+- `cineflow:connection` —— 在线 / 离线（跟随系统网络 + 心跳成败）
+- `cineflow:feed` —— 运营投放内容（升级 / 广告 / 推广）
+
+网页端与插件端走同一套前端通道（`src/services/clientChannel.ts`），直接请求同源
+`/api/client-feed`，无需区分运行环境。
+
+**运营如何投放广告 / 推广 / 升级公告：** 编辑 `functions/api/client-feed.ts` 里的 `FEED`
+配置即可，无需改代码、无需重新打包客户端：
+
+| 字段 | 作用 |
+| ---- | ---- |
+| `latestVersion` / `minVersion` | 升级与强制升级判定（带 `?v=` 上报的客户端版本比对） |
+| `upgrade` | 升级公告标题 / 说明 / 下载页 |
+| `banner` | 常驻推广条（主站 / 活动 / 广告位），可置 `null` 关闭 |
+| `promos[]` | 推广 / 广告队列，支持 `startAt` / `endAt` 控制上下架 |
+
+界面呈现见 `src/components/ClientFeed.tsx`：顶部推广条 + 升级提示（可关闭，
+`localStorage` 记忆），顶栏「已连接主站 · Xs」状态点来自 `Header.tsx`。
+
 ## 后续：第二阶段
 
 本地已有 FFmpeg，分镜逆向可以直接在客户端做：
