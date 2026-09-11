@@ -9,6 +9,7 @@ const DEFAULT_ALLOWED_HOSTS = [
   // TikTok
   'tiktokcdn.com',
   'tiktokcdn-us.com',
+  'tiktok.com',
   'muscdn.com',
   'musical.ly',
   'byteoversea.com',

@@ -15,12 +15,16 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
+import { existsSync } from 'node:fs';
 
 const PORT = Number(process.env.PORT || 9000);
 const API_KEY = process.env.API_KEY || '';
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
 const YTDLP_PATH = process.env.YTDLP_PATH || 'yt-dlp';
 const CACHE_TTL = Number(process.env.CACHE_TTL || 300) * 1000;
+/** YouTube / Instagram 对数据中心 IP 风控严重，挂载 cookies.txt 才能稳定解析 */
+const COOKIES_PATH = process.env.COOKIES_PATH || '/app/cookies.txt';
+const HAS_COOKIES = existsSync(COOKIES_PATH);
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36';
 
@@ -84,17 +88,18 @@ async function parse(url) {
   const cached = cache.get(url);
   if (cached && cached.expiresAt > Date.now()) return cached.payload;
 
-  const info = await runYtDlp([
+  const args = [
     '--no-warnings',
     '--no-playlist',
     '--no-check-certificates',
     '--dump-json',
     '--user-agent',
     UA,
-    '--extractor-args',
-    'youtube:player_client=android_vr,web_safari',
-    url,
-  ]);
+  ];
+  if (HAS_COOKIES) args.push('--cookies', COOKIES_PATH);
+  args.push('--extractor-args', 'youtube:player_client=android_vr,web_safari', url);
+
+  const info = await runYtDlp(args);
 
   const best = pickBestFormat(info);
   if (!best?.url) {
@@ -155,7 +160,12 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
   if (url.pathname === '/health' || url.pathname === '/') {
-    return json(res, 200, { ok: true, service: 'parser-core', providers: ['yt-dlp'] });
+    return json(res, 200, {
+      ok: true,
+      service: 'parser-core',
+      providers: ['yt-dlp'],
+      cookies: HAS_COOKIES,
+    });
   }
 
   if (url.pathname === '/api/json') {

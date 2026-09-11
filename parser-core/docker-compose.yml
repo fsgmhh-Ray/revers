@@ -12,3 +12,6 @@ services:
       API_KEY: ${API_KEY:-}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
       CACHE_TTL: 300
+    # YouTube / Instagram 强风控：把浏览器导出的 cookies.txt 放到本目录后，启用下面两行
+    # volumes:
+    #   - ./cookies.txt:/app/cookies.txt:ro

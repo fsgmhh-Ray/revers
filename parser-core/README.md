@@ -56,6 +56,30 @@ Zero Trust 侧的路由配置：
 | `YTDLP_PATH` | yt-dlp 可执行文件路径 | `yt-dlp` |
 | `CACHE_TTL` | 解析结果缓存秒数 | `300` |
 
+## 关于平台风控（重要）
+
+数据中心 IP（Oracle / Hetzner 等）普遍被 YouTube、TikTok 风控，实测表现：
+
+| 平台 | 无 cookies | 有 cookies |
+| --- | --- | --- |
+| YouTube | ❌ `This video is unavailable`（所有 player_client 均失败） | ✅ 需 Google 账号 cookies |
+| Instagram | ❌ 多数内容需登录 | ✅ 需 IG 账号 cookies |
+| TikTok | ❌ 网页抓取与直链均 403 | 走 TikWM 更稳（见下） |
+
+**TikTok 建议不要走内核**：前端 `resolveVideo` 已把 TikWM 排在内核前面，
+TikWM 返回的 `*.tiktokcdn-us.com` / `*.tiktok.com` 直链可由 Cloudflare 边缘直接下载（实测 200 / 3.3MB）。
+
+**为 YouTube / Instagram 配 cookies**：
+
+```bash
+# 本机浏览器装 "Get cookies.txt LOCALLY" 扩展，导出 youtube.com 的 cookies（Netscape 格式）
+scp cookies.txt ubuntu@<VPS>:~/revers-src/parser-core/cookies.txt
+
+# VPS 上启用挂载：编辑 docker-compose.yml 取消注释 volumes 两行
+sudo docker compose up -d --build
+curl -s http://127.0.0.1:9000/health      # "cookies": true 表示已加载
+```
+
 ## 故障排查：`/health` 返回 502
 
 Cloudflare 返回 502（带 CF 错误页）说明 **Tunnel 通了、但源站没连上**，按顺序查：

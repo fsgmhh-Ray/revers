@@ -253,16 +253,18 @@ export async function resolveVideo(
     chain.push(() => Promise.resolve(mockProvider(url, platform)));
   }
 
+  // TikTok 优先走 TikWM：自建内核所在的数据中心 IP 常被 TikTok 风控（403），
+  // 而 TikWM 返回的直链可由 Cloudflare 边缘直接下载，成功率更高、延迟更低。
+  if (platform === 'tiktok' && env.TIKWM_API_URL !== 'off') {
+    chain.push(() => tikwmProvider(url, env));
+  }
+
   if (env.COBALT_INSTANCE_URL) {
     chain.push(() => cobaltProvider(url, platform, env));
   }
 
   if (env.YTDLP_SERVICE_URL) {
     chain.push(() => ytdlpProvider(url, platform, env));
-  }
-
-  if (platform === 'tiktok' && env.TIKWM_API_URL !== 'off') {
-    chain.push(() => tikwmProvider(url, env));
   }
 
   if (!chain.length) {
