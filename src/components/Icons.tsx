@@ -37,6 +37,13 @@ export const IconRefresh = (p: IconProps) => (
   </svg>
 );
 
+export const IconShield = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M12 3 5 6v6c0 4 3 7.5 7 9 4-1.5 7-5 7-9V6l-7-3Z" />
+    <path d="m9 12 2 2 4-4" />
+  </svg>
+);
+
 export const IconCopy = (p: IconProps) => (
   <svg {...base(p)}>
     <rect x="9" y="9" width="11" height="11" rx="2" />

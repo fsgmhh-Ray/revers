@@ -20,7 +20,7 @@ export interface GatewayHealth {
   };
 }
 
-const MAIN_SITE = 'https://cineflowing.com';
+const MAIN_SITE = 'https://www.cineflowing.com/';
 
 export function Header({
   health,

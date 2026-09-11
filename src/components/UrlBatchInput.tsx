@@ -12,9 +12,12 @@ const SAMPLES = [
 export function UrlBatchInput({
   onSubmit,
   isParsing,
+  engineLabel,
 }: {
   onSubmit: (text: string) => void;
   isParsing: boolean;
+  /** 当前执行引擎的中文名，让用户知道这批链接由谁处理 */
+  engineLabel?: string;
 }) {
   const [text, setText] = useState('');
 
@@ -58,10 +61,6 @@ export function UrlBatchInput({
         onKeyDown={(e) => {
           if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') submit();
         }}
-        onPaste={(e) => {
-          const pasted = e.clipboardData.getData('text');
-          if (pasted && !text) e.preventDefault();
-        }}
       />
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -93,7 +92,10 @@ export function UrlBatchInput({
         </div>
       </div>
 
-      <p className="mt-2.5 text-[11px] text-slate-600">快捷键 Ctrl / ⌘ + Enter 立即解析</p>
+      <p className="mt-2.5 text-[11px] text-slate-600">
+        快捷键 Ctrl / ⌘ + Enter 立即解析
+        {engineLabel ? ` · 当前由「${engineLabel}」发出请求` : null}
+      </p>
     </section>
   );
 }

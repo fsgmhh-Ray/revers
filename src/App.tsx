@@ -12,7 +12,7 @@ import { useSettings } from './hooks/useSettings';
 import { useTaskManager } from './hooks/useTaskManager';
 import type { TaskItem } from './types/parser';
 
-const MAIN_SITE_IMPORT = 'https://cineflowing.com/import';
+const MAIN_SITE_IMPORT = 'https://www.cineflowing.com/import';
 
 export default function App() {
   const { settings, update, reset } = useSettings();
@@ -70,7 +70,11 @@ export default function App() {
       <main className="mx-auto max-w-[1400px] space-y-4 px-5 py-5">
         <EnginePromo state={engineState} />
 
-        <UrlBatchInput onSubmit={(text) => void addUrls(text)} isParsing={isParsing} />
+        <UrlBatchInput
+          onSubmit={(text) => void addUrls(text)}
+          isParsing={isParsing}
+          engineLabel={engineState.activeLabel}
+        />
 
         <Toolbar
           tasks={tasks}
