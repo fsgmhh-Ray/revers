@@ -1,9 +1,12 @@
 # 复制为 .dev.vars（本地 wrangler）或 .env.local（npm run dev）后填写
 # 两者都不会提交到 Git
 
-# 自建解析内核（Docker: 见 parser-core/README）
+# 自建解析内核（Docker: 见 parser-core/；推荐经 Cloudflare Tunnel 暴露）
 COBALT_INSTANCE_URL=http://localhost:9000
 COBALT_API_KEY=
+
+# 让 YouTube / Instagram / 抖音 等 IP 绑定直链一律走源站代拉（默认按域名自动判断）
+# FORCE_ORIGIN_PROXY=1
 
 # TikTok 免费兜底源
 TIKWM_API_URL=https://www.tikwm.com/api/

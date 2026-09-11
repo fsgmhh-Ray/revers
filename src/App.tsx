@@ -35,7 +35,7 @@ export default function App() {
 
   useEffect(() => {
     let alive = true;
-    fetch('/api/parse')
+    fetch('/api/parse?probe=1')
       .then((res) => (res.ok ? res.json() : Promise.reject()))
       .then((data) => alive && setHealth(data as GatewayHealth))
       .catch(() => alive && setHealth({ ok: false }));

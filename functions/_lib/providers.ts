@@ -68,11 +68,24 @@ function hashCode(input: string): number {
 /* ------------------------------------------------------------------ *
  * 2) Cobalt：自建解析内核（推荐，规避 Cloudflare 出口 IP 封禁）
  * ------------------------------------------------------------------ */
+interface CobaltMeta {
+  id?: string;
+  title?: string;
+  duration?: number;
+  uploader?: string;
+  thumbnail?: string;
+  width?: number;
+  height?: number;
+  extractor?: string;
+  webpage_url?: string;
+}
+
 interface CobaltPayload {
   status?: 'tunnel' | 'redirect' | 'picker' | 'stream' | 'error' | string;
   url?: string;
   filename?: string;
   text?: string;
+  meta?: CobaltMeta;
   items?: { type?: string; url?: string; filename?: string }[];
   picker?: { type?: string; url?: string }[];
 }
@@ -129,17 +142,22 @@ async function cobaltProvider(url: string, platform: PlatformType, env: Env): Pr
 
   if (!direct) throw new ProviderError('解析内核未返回视频直链');
 
+  const meta = payload.meta || {};
+  const width = meta.width || 0;
+  const height = meta.height || 0;
+
   return {
     provider: 'cobalt',
     data: {
-      id: uuid(),
+      id: meta.id || uuid(),
       originalUrl: url,
       platform,
-      title: payload.filename?.replace(/\.[^.]+$/, '') || `${platform}_${Date.now()}`,
-      author: { name: 'Unknown Creator' },
-      duration: 0,
-      coverUrl: '',
+      title: meta.title || payload.filename?.replace(/\.[^.]+$/, '') || `${platform}_${Date.now()}`,
+      author: { name: meta.uploader || 'Unknown Creator' },
+      duration: Number(meta.duration) || 0,
+      coverUrl: absoluteUrl(meta.thumbnail || '', base),
       downloadUrl: absoluteUrl(direct, base),
+      dimensions: width && height ? { width, height } : undefined,
       hasWatermark: false,
       provider: 'cobalt',
     },

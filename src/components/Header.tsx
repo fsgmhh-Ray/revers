@@ -8,6 +8,14 @@ export interface GatewayHealth {
     ytdlp?: boolean;
     tikwm?: boolean;
   };
+  probe?: {
+    endpointHost?: string;
+    reachable?: boolean;
+    httpStatus?: number;
+    latencyMs?: number;
+    error?: string;
+    hint?: string;
+  };
 }
 
 const MAIN_SITE = 'https://cineflowing.com';
@@ -53,6 +61,25 @@ export function Header({
               {health ? (active ? `解析链：${active}` : '未配置解析源') : '检测中…'}
             </span>
           </div>
+
+          {health?.probe && (
+            <div
+              className="hidden items-center gap-2 rounded-xl border border-white/5 bg-white/[.03] px-2.5 py-1.5 lg:flex"
+              title={health.probe.hint || health.probe.error || ''}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  health.probe.reachable ? 'bg-emerald-400' : 'bg-rose-400'
+                }`}
+              />
+              <span className="text-[11px] text-slate-400">
+                内核 {health.probe.endpointHost} ·{' '}
+                {health.probe.reachable
+                  ? `${health.probe.latencyMs}ms`
+                  : `HTTP ${health.probe.httpStatus ?? 'ERR'}`}
+              </span>
+            </div>
+          )}
 
           <a className="btn-ghost hidden sm:inline-flex" href={MAIN_SITE} target="_blank" rel="noreferrer">
             主站 cineflowing.com

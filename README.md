@@ -15,15 +15,23 @@
         ▼
 [ Cloudflare Pages Functions —— 边缘网关 ]
         ├── normalize & detectPlatform
-        ├── Cobalt / yt-dlp 自建内核  (IG / YT / 抖音 / 小红书，规避 CF 出口 IP 封禁)
-        └── TikWM 公共源              (TikTok 兜底，零配置可用)
+        ├── parser-core 自建内核  ──(Cloudflare Tunnel)──> [ Oracle VPS · yt-dlp ]
+        │       解析 IG / YT / 抖音 / 小红书，规避 CF 出口 IP 封禁
+        └── TikWM 公共源           (TikTok 兜底，零配置可用)
         │
         ▼  返回统一 VideoMetadata（无水印直链）
-[ 客户端 ] ──GET /api/proxy-download（流式中转 + Referer/UA 补全）──> Blob 保存 / ZIP 打包
+[ 客户端 ] ──GET /api/proxy-download──> Blob 保存 / ZIP 打包
+                    │
+                    ├── 边缘直连上游 CDN（快，命中缓存时）
+                    └── 回退：源站代拉 /api/fetch（YT / IG 直链绑定 IP 时必须走这条）
 ```
 
 **为什么需要自建内核**：YouTube 与 Instagram 会封禁 Cloudflare 数据中心网段（403 / CAPTCHA），
 仅靠 Worker 原生 `fetch` 无法长期稳定抓取。因此 IG / YT 必须走独立 VPS 上的 `parser-core`。
+
+**为什么下载也要过内核**：YT / IG 的视频直链绑定了首次解析时的出口 IP 且带时效签名，
+Cloudflare 边缘回源拉取会被判 403。`proxy-download` 会先尝试边缘直连，失败自动回退到
+内核的 `/api/fetch` 由 VPS 代拉（对 `googlevideo.com`、`fbcdn.net`、`douyinvod.com` 等域名默认直接走源站）。
 
 ## 2. 目录结构
 
@@ -72,8 +80,9 @@ MOCK_PARSER=1        # 返回示例素材，用于联调 UI 与下载链路
 
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
-| `COBALT_INSTANCE_URL` | 自建 Cobalt / parser-core 地址（IG / YT 必需） | 空 |
+| `COBALT_INSTANCE_URL` | 自建 parser-core 地址，如 `https://api-reverse.cineflowing.com`（IG / YT 必需） | 空 |
 | `COBALT_API_KEY` | 内核密钥，请求头 `Authorization: Api-Key xxx` | 空 |
+| `FORCE_ORIGIN_PROXY` | `1` 时所有下载一律由内核代拉（默认已按域名自动判断） | 空 |
 | `YTDLP_SERVICE_URL` | 另一个 Cobalt 协议兼容服务（可选） | 空 |
 | `TIKWM_API_URL` | TikTok 公共兜底源，设为 `off` 可关闭 | `https://www.tikwm.com/api/` |
 | `ALLOWED_DOWNLOAD_HOSTS` | 追加允许中转的域名（逗号分隔） | 内置 CDN 白名单 |
@@ -82,18 +91,32 @@ MOCK_PARSER=1        # 返回示例素材，用于联调 UI 与下载链路
 
 > `ALLOW_ANY_HOST=1` 仅供本地调试，**生产环境切勿开启**（会有 SSRF 风险）。
 
-## 5. 部署自建解析内核（VPS）
+## 5. 部署自建解析内核（VPS + Cloudflare Tunnel）
+
+采用 **Cloudflare Tunnel（Zero Trust）** 架构：VPS 不开任何公网端口，
+无需配置 Oracle 安全列表 / iptables，自带边缘 HTTPS，源站 IP 不暴露。
 
 ```bash
-cd parser-core
-docker compose up -d --build      # 暴露 9000 端口
-curl http://127.0.0.1:9000/health # {"ok":true,...}
-# 建议用 Nginx + Let's Encrypt 反代到 https://parser-core.yourdomain.com
+# 在 Oracle VPS 上
+git clone https://github.com/fsgmhh-Ray/revers.git && cd revers/parser-core
+chmod +x deploy.sh
+./deploy.sh                      # 构建启动 + 健康检查 + 打印 API_KEY
+./deploy.sh --tunnel eyJhIjoi…   # 安装 cloudflared 连接器（TOKEN 从 Zero Trust 隧道页复制）
 ```
 
-内核以 Cobalt 协议对外提供服务：`POST https://parser-core.yourdomain.com/api/json`
+Zero Trust 路由配置：Subdomain `api-reverse` · Domain `cineflowing.com` ·
+Service `HTTP` → `localhost:9000`。详见 [`parser-core/README.md`](./parser-core/README.md)。
+
+内核以 Cobalt 协议对外提供服务：`POST https://api-reverse.cineflowing.com/api/json`
 body `{ "url": "..." }` → `{ "status": "redirect", "url": "<直链>", "meta": {...} }`，
 内置 5 分钟结果缓存。
+
+**连通性自检**（部署到 Pages 后直接访问）：
+
+```bash
+curl "https://reverse.cineflowing.com/api/parse?probe=1"
+# probe.httpStatus = 200 即内核可达；502 说明 Tunnel 通了但源站没起来
+```
 
 ## 6. 部署到 Cloudflare Pages
 
@@ -112,11 +135,13 @@ npm run deploy
 ## 7. 已验证（冒烟）
 
 - [x] `tsc --noEmit` 类型检查通过、`vite build` 构建通过
-- [x] `GET /api/parse` 返回网关与解析链状态
+- [x] `GET /api/parse` 返回网关与解析链状态，`?probe=1` 可探测内核连通性
 - [x] `POST /api/parse` 正常解析；不支持的平台返回 `422`
+- [x] TikTok 真实链接解析成功（TikWM 兜底源，返回标题 / 封面 / 时长 / 直链）
 - [x] `/api/proxy-download` 全量下载 `200` + `Content-Disposition: attachment`
 - [x] `/api/proxy-download` Range 请求 `206` + `Content-Range`
 - [x] SSRF 防护：非白名单地址（含 `169.254.169.254`）返回 `403`
+- [x] 边缘直连失败时自动回退内核 `/api/fetch` 代拉
 
 ## 8. Roadmap
 

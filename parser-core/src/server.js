@@ -14,6 +14,7 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 
 const PORT = Number(process.env.PORT || 9000);
 const API_KEY = process.env.API_KEY || '';
@@ -121,6 +122,26 @@ async function parse(url) {
   return payload;
 }
 
+/** 阻止通过 /api/fetch 打内网（SSRF 防护） */
+function isPrivateHost(hostname) {
+  const h = hostname.toLowerCase();
+  if (h === 'localhost' || h === '::1' || h.endsWith('.local') || h.endsWith('.internal')) return true;
+  if (/^127\./.test(h) || /^10\./.test(h) || /^169\.254\./.test(h) || /^192\.168\./.test(h)) return true;
+  const m = /^172\.(\d+)\./.exec(h);
+  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
+  return false;
+}
+
+function buildReferer(target) {
+  const h = target.hostname.toLowerCase();
+  if (/tiktok|muscdn|byteoversea|musical\.ly/.test(h)) return 'https://www.tiktok.com/';
+  if (/instagram|cdninstagram|fbcdn/.test(h)) return 'https://www.instagram.com/';
+  if (/youtube|youtu\.be|googlevideo|ytimg/.test(h)) return 'https://www.youtube.com/';
+  if (/douyin|iesdouyin/.test(h)) return 'https://www.douyin.com/';
+  if (/xiaohongshu|xhscdn/.test(h)) return 'https://www.xiaohongshu.com/';
+  return `${target.protocol}//${target.hostname}/`;
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -161,6 +182,63 @@ const server = http.createServer(async (req, res) => {
       return json(res, payload.status === 'error' ? 422 : 200, payload);
     } catch (err) {
       return json(res, 500, { status: 'error', text: String(err?.message || err).slice(0, 300) });
+    }
+  }
+
+  /**
+   * GET /api/fetch?url=<直链> —— 源站流式下载代理
+   * YouTube / Instagram 的直链通常绑定首次请求的出口 IP 并带过期签名，
+   * Cloudflare 边缘回源拉取会被拒绝；因此由本服务（Tunnel 内网）代为拉取后再吐给边缘。
+   */
+  if (url.pathname === '/api/fetch') {
+    try {
+      if (API_KEY && req.headers.authorization !== `Api-Key ${API_KEY}`) {
+        return json(res, 401, { status: 'error', text: 'unauthorized' });
+      }
+
+      const target = url.searchParams.get('url') || '';
+      if (!target) return json(res, 400, { status: 'error', text: 'url is required' });
+
+      let parsed;
+      try {
+        parsed = new URL(target);
+      } catch {
+        return json(res, 400, { status: 'error', text: 'invalid url' });
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return json(res, 400, { status: 'error', text: 'unsupported protocol' });
+      }
+      if (isPrivateHost(parsed.hostname)) {
+        return json(res, 403, { status: 'error', text: 'host not allowed' });
+      }
+
+      const headers = { 'User-Agent': UA, Accept: 'video/*,*/*;q=0.8', Referer: buildReferer(parsed) };
+      if (req.headers.range) headers.Range = req.headers.range;
+
+      const upstream = await fetch(parsed.toString(), { headers, redirect: 'follow' });
+      if (!upstream.ok && upstream.status !== 206) {
+        return json(res, 502, { status: 'error', text: `upstream HTTP ${upstream.status}` });
+      }
+
+      const out = {
+        'Content-Type': upstream.headers.get('content-type') || 'video/mp4',
+        'Accept-Ranges': upstream.headers.get('accept-ranges') || 'bytes',
+        'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
+        'Access-Control-Expose-Headers': 'Content-Length,Content-Disposition',
+        'Cache-Control': 'private, max-age=60',
+      };
+      if (upstream.headers.get('content-length')) out['Content-Length'] = upstream.headers.get('content-length');
+      if (upstream.headers.get('content-range')) out['Content-Range'] = upstream.headers.get('content-range');
+      const filename = (url.searchParams.get('filename') || parsed.pathname.split('/').pop() || 'video.mp4').slice(0, 100);
+      out['Content-Disposition'] =
+        `attachment; filename="${filename.replace(/[\r\n"]/g, '')}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+
+      res.writeHead(upstream.status, out);
+      if (upstream.body) Readable.fromWeb(upstream.body).pipe(res);
+      else res.end();
+      return;
+    } catch (err) {
+      return json(res, 502, { status: 'error', text: String(err?.message || err).slice(0, 300) });
     }
   }
 

@@ -11,6 +11,8 @@ pages_build_output_dir = "dist"
 # COBALT_API_KEY = ""
 # TikTok 兜底解析源（无需自建即可用）
 TIKWM_API_URL = "https://www.tikwm.com/api/"
+# 所有下载一律由内核代拉（默认已对 YT / IG / 抖音等按域名自动判断）
+# FORCE_ORIGIN_PROXY = "1"
 # 允许被 proxy-download 中转的额外域名（逗号分隔）
 # ALLOWED_DOWNLOAD_HOSTS = ""
 # 单文件下载大小上限（字节，0 表示不限制）
