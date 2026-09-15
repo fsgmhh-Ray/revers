@@ -1,0 +1,9 @@
+node_modules/
+bin/
+dist/
+dist_*/
+out/
+*.log
+*.tmp
+probe-result.json
+cineflowing-self-check.json

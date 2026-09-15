@@ -5,7 +5,8 @@
  * 就会走引擎路由的桌面端分支（见 src/services/engineRouter.ts）。
  */
 
-const { contextBridge, ipcRenderer } = require('node:electron');
+// 同 main.js：electron 必须不带 node: 前缀，否则报 ERR_UNKNOWN_BUILT_IN_MODULE。
+const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('CINEFLOW_RUNTIME', 'electron');
 

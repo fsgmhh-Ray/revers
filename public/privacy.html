@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>隐私政策 · Cineflowing Reverse 助手</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #141821;
+    --line: #232838;
+    --text: #e6e9f2;
+    --muted: #9aa3b8;
+    --accent: #7c8cff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 56px 24px 96px; }
+  .badge {
+    display: inline-block; padding: 4px 10px; border-radius: 999px;
+    background: rgba(124,140,255,.14); color: var(--accent);
+    font-size: 12px; letter-spacing: .04em;
+  }
+  h1 { font-size: 28px; margin: 18px 0 6px; letter-spacing: -.01em; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 36px; }
+  h2 {
+    font-size: 17px; margin: 36px 0 12px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  p, li { color: #cdd4e4; }
+  ul { padding-left: 20px; }
+  li { margin: 6px 0; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 20px; margin: 20px 0;
+  }
+  .card strong { color: #fff; }
+  code {
+    background: #1c2130; padding: 1px 6px; border-radius: 5px;
+    font-size: 13px; color: #b9c4ff;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  footer {
+    margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <span class="badge">Cineflowing Reverse</span>
+  <h1>隐私政策</h1>
+  <div class="meta">适用于「Cineflowing Reverse 助手」Chrome 扩展与 reverse.cineflowing.com 网页应用 · 更新日期：2026 年 9 月 15 日</div>
+
+  <div class="card">
+    <strong>一句话总结：</strong>本扩展不收集、不存储、不上传你的任何个人数据到开发者服务器。所有解析请求都从你自己的浏览器直接发往目标平台，下载文件也仅保存在你自己的电脑上。
+  </div>
+
+  <h2>1. 我们收集哪些数据</h2>
+  <p><strong>我们不收集任何个人数据。</strong>具体而言：</p>
+  <ul>
+    <li>不收集你的浏览历史、账号信息、设备标识或位置信息；</li>
+    <li>不采集使用统计、埋点或崩溃日志并回传服务器；</li>
+    <li>不读取你粘贴之外的任何页面内容。</li>
+  </ul>
+
+  <h2>2. 关于 Cookie 的使用</h2>
+  <p>扩展申请了 <code>cookies</code> 权限，用途<strong>仅限于</strong>：</p>
+  <ul>
+    <li>让你发起的解析请求，携带你<strong>本人</strong>在目标平台（YouTube / Instagram / TikTok）已存在的登录状态，从而解析需要登录才能访问的内容；</li>
+    <li>判断你是否已登录某平台，用于在界面上提示当前可用的解析能力。</li>
+  </ul>
+  <p>扩展<strong>不会</strong>读取 Cookie 的具体值并上传，<strong>不会</strong>将 Cookie 发送给开发者或任何第三方服务器。整个流程中，Cookie 只在你的浏览器与目标平台之间传递。</p>
+
+  <h2>3. 网络请求发往何处</h2>
+  <p>解析与下载请求由你的浏览器直接发出，目标为：</p>
+  <ul>
+    <li>你主动提交链接所对应的平台（YouTube / Instagram / TikTok）及其官方 CDN；</li>
+    <li>第三方公开解析接口 <code>tikwm.com</code>（仅作为 TikTok 的兜底解析源）；</li>
+    <li>配套站点 <code>reverse.cineflowing.com</code>（用于回填解析结果）。</li>
+  </ul>
+  <p>请求内容仅为视频链接与必要的元数据，不包含你的身份信息。</p>
+
+  <h2>4. 数据存储</h2>
+  <ul>
+    <li>解析结果与下载队列保存在你的浏览器本地（内存 / localStorage），关闭后不影响设备；</li>
+    <li>下载的视频文件保存在你本机的下载目录，由你自行管理；</li>
+    <li>开发者服务器<strong>不保存</strong>你的任何解析记录或下载内容。</li>
+  </ul>
+
+  <h2>5. 第三方服务</h2>
+  <p>本扩展可能调用第三方解析接口（<code>tikwm.com</code>）。这些服务的数据处理行为受其自身隐私政策约束，建议你自行查阅。除实现核心功能所必需外，我们不会向任何第三方共享你的信息。</p>
+
+  <h2>6. 数据出售与转让</h2>
+  <p>我们<strong>不出售、不出租、不转让</strong>用户数据给任何第三方，也不将其用于广告投放或与核心功能无关的用途。</p>
+
+  <h2>7. 远程代码</h2>
+  <p>本扩展的全部逻辑均随安装包一同分发，<strong>不加载</strong>任何远程脚本或动态代码，符合 Chrome Web Store 的相关要求。</p>
+
+  <h2>8. 儿童隐私</h2>
+  <p>本产品不面向 13 岁以下儿童，也不会有意收集儿童的个人信息。</p>
+
+  <h2>9. 使用规范</h2>
+  <p>请仅下载你拥有合法权利保存的内容，并遵守各目标平台的服务条款与相关版权法规。使用者需自行承担因不当使用产生的责任。</p>
+
+  <h2>10. 政策变更</h2>
+  <p>若本政策发生实质性变更，我们会在本页面更新「更新日期」，并在扩展更新说明中提示。</p>
+
+  <h2>11. 联系方式</h2>
+  <p>如对本隐私政策有任何疑问，请联系：<a href="mailto:hhuang.cm@gmail.com">hhuang.cm@gmail.com</a></p>
+
+  <footer>
+    © 2026 Cineflowing · <a href="https://www.cineflowing.com/">www.cineflowing.com</a>
+  </footer>
+
+</div>
+</body>
+</html>

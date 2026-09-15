@@ -9,8 +9,34 @@ const PROTOCOL = 'CINEFLOW_EXT_V1';
 const PAGE_CHANNEL = `${PROTOCOL}:page`;
 const EXT_CHANNEL = `${PROTOCOL}:extension`;
 
-// 页面据此判断插件已就绪
-document.documentElement.setAttribute('data-cineflow-extension', 'true');
+/**
+ * 页面据此判断插件已就绪。
+ *
+ * 注意：本脚本以 run_at: document_start 注入，此刻 <html> 可能还没被创建，
+ * 直接访问 document.documentElement 会得到 null 并抛异常，
+ * 而异常会中断整个内容脚本（连消息中继都注册不上）——插件就"检测不到"了。
+ * 所以这里必须等 <html> 真正出现再打标记。
+ */
+function markReady() {
+  const root = document.documentElement;
+  if (root) root.setAttribute('data-cineflow-extension', 'true');
+  return Boolean(root);
+}
+
+if (!markReady()) {
+  const observer = new MutationObserver(() => {
+    if (markReady()) observer.disconnect();
+  });
+  observer.observe(document, { childList: true, subtree: true });
+  document.addEventListener(
+    'DOMContentLoaded',
+    () => {
+      markReady();
+      observer.disconnect();
+    },
+    { once: true },
+  );
+}
 
 function reply(id, ok, data, error) {
   window.postMessage({ source: EXT_CHANNEL, id, ok, data, error }, '*');

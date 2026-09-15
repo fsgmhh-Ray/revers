@@ -13,6 +13,8 @@
     "build:only": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test:extension": "node extension/test/relay.test.cjs",
+    "icons:extension": "node extension/scripts/make-icons.mjs",
     "pages:dev": "wrangler pages dev -- npm run dev",
     "deploy": "npm run build && wrangler pages deploy dist --project-name=reverse-cineflowing",
     "core:dev": "node parser-core/src/server.js"

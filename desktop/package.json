@@ -3,11 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "description": "reverse.cineflowing.com 桌面端：本机 IP 解析 + 内置 yt-dlp/FFmpeg",
+  "author": "Cineflowing",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/run-electron.js .",
     "binaries": "node scripts/fetch-binaries.js",
-    "dist": "electron-builder"
+    "icon": "node scripts/make-icon.js",
+    "check": "node --check main.js && node --check ipc.js && node --check config.js && node --check preload.js && node --check smoke.test.js && node --check parse.test.js",
+    "smoke": "node scripts/run-electron.js smoke.test.js",
+    "parse": "node scripts/run-electron.js parse.test.js",
+    "selfcheck": "node scripts/run-electron.js . --self-check",
+    "probe:packaged": "node scripts/run-probe.js",
+    "dist": "electron-builder",
+    "pack": "electron-builder --dir",
+    "ci": "npm install && npm run binaries && npm run icon && npm run check && npm run smoke && npm run dist && npm run probe:packaged"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -16,9 +25,37 @@
   "build": {
     "appId": "com.cineflowing.reverse",
     "productName": "Cineflowing Reverse",
-    "files": ["main.js", "preload.js", "bin/**"],
-    "win": { "target": "nsis" },
-    "mac": { "target": "dmg" },
-    "linux": { "target": "AppImage" }
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "ipc.js",
+      "config.js",
+      "preload.js",
+      "bin/**"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "bin/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "AudioVideo"
+    }
   }
 }
