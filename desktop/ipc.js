@@ -111,6 +111,134 @@ function isCookieError(message) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* 显式导入的 cookies.txt（唯一稳定的登录态通道）                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 为什么必须有这条路。
+ *
+ * `--cookies-from-browser` 在 Windows + Chrome 127+ 上是**双重死锁**：
+ *   ① Chrome 运行期间独占锁定 Cookies 数据库，yt-dlp 连复制都失败
+ *      （报 "Could not copy Chrome cookie database"，yt-dlp #7271）；
+ *   ② 即使复制出来也白搭 —— Local State 里存在 app_bound_encrypted_key，
+ *      说明启用了 App-Bound 加密，密文无法在浏览器进程外解开。
+ * 关掉浏览器只能绕过 ①，绕不过 ②。
+ *
+ * 因此对"需要登录态的内容"（TikTok 短剧 / 限区内容 / 年龄限制等），
+ * 让用户用一个浏览器扩展导出 Netscape 格式的 cookies.txt，是最靠得住的办法。
+ */
+function resolveCookieFile(file) {
+  if (typeof file !== 'string' || !file.trim()) return null;
+  const p = file.trim();
+  try {
+    const st = fs.statSync(p);
+    if (!st.isFile() || st.size === 0) return null;
+    return p;
+  } catch {
+    return null;
+  }
+}
+
+/** 校验是不是可用的 Netscape cookies.txt，并数出 Cookie 条目 */
+function inspectCookieFile(file) {
+  const p = resolveCookieFile(file);
+  if (!p) return { ok: false, count: 0, error: '文件不存在或为空' };
+  try {
+    const text = fs.readFileSync(p, 'utf8');
+    const count = text
+      .split(/\r?\n/)
+      .filter((line) => {
+        const t = line.trim();
+        return Boolean(t) && !t.startsWith('#') && t.includes('\t');
+      }).length;
+    if (!count) return { ok: false, count: 0, error: '不像 Netscape 格式的 Cookie 文件（没有 Cookie 行）' };
+    return {
+      ok: true,
+      count,
+      path: p,
+      // 有 TikTok 的 Cookie 才谈得上给短剧解锁
+      hasTikTok: /(^|\.)tiktok\.com/m.test(text),
+    };
+  } catch (err) {
+    return { ok: false, count: 0, error: String((err && err.message) || err) };
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 报错翻译                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 把 yt-dlp 的原始报错翻译成「用户能据以行动」的说明。
+ *
+ * yt-dlp 的文案是写给开发者看的（"No video formats found!"），
+ * 原样丢到界面上等于什么都没说 —— 用户既不知道是自己的问题还是内容的问题，
+ * 也不知道下一步该做什么。这里按已知失败模式补上原因与建议。
+ */
+function describeYtDlpError(rawMessage, { url = '', cookieWarning = null } = {}) {
+  const raw = String(rawMessage || '').trim();
+  const first = raw.split('\n').find((l) => l.trim()) || '解析失败';
+  const isTikTok = /tiktok/i.test(url);
+
+  let title = '解析失败';
+  let reasons = [];
+  let advice = [];
+
+  if (/no video formats found/i.test(raw)) {
+    if (isTikTok) {
+      title = 'TikTok 没有返回可播放地址';
+      reasons = [
+        '该内容多半是短剧 / 限免付费剧集，TikTok 只把播放地址发给"有权限的账号"',
+        '也可能受地区限制，或该集已下架/被审核',
+      ];
+    } else {
+      title = '服务端没有返回可播放地址';
+      reasons = ['内容可能已下架、需要登录，或对当前地区不可见'];
+    }
+    advice = [
+      cookieWarning
+        ? '本机浏览器登录态读取失败（见下方说明），可在「设置 → 登录态」导入 cookies.txt 后重试'
+        : '若该内容需要登录，请在「设置 → 登录态」导入已登录的 cookies.txt 后重试',
+      '同一部短剧换个"免费试看"集数试试，限免内容通常只有前几集可匿名获取',
+      '也可换其它来源（抖音 / YouTube 上的同剧）',
+    ];
+  } else if (/could not copy|failed to decrypt|dpapi|cookie database/i.test(raw)) {
+    title = '读不到浏览器里的登录态';
+    reasons = [
+      'Chrome / Edge 运行时独占锁定了 Cookie 数据库，或启用了 App-Bound 加密（Chrome 127+），密文无法在浏览器外解开',
+    ];
+    advice = ['在「设置 → 登录态」导入浏览器扩展导出的 cookies.txt，比读浏览器数据库可靠得多'];
+  } else if (/video unavailable|not available in your country|removed|no longer exists|404/i.test(raw)) {
+    title = '该内容已下架或对当前地区不可见';
+    reasons = ['服务端明确返回"不可用"，通常不是本机问题'];
+    advice = ['换一个链接，或使用对应地区的网络环境'];
+  } else if (/login required|sign in|private video|age.?restricted|confirm you'?re not a bot|please log in/i.test(raw)) {
+    title = '该内容需要登录后才能访问';
+    reasons = ['平台要求登录态，匿名请求被拒'];
+    advice = ['在「设置 → 登录态」导入已登录该平台的 cookies.txt 后重试'];
+  } else if (/http error 403|forbidden/i.test(raw)) {
+    title = '直链被拒绝（403）';
+    reasons = ['媒体直链通常带时效签名与防盗链校验，过期或被限制来源会直接 403'];
+    advice = ['重新解析一次拿到新直链；下载交给桌面端，它会回到原始页面重新取流'];
+  } else if (/unsupported url/i.test(raw)) {
+    title = '这个链接不被支持';
+    reasons = ['链接形态不完整，或是 yt-dlp 尚未支持的站点'];
+    advice = ['用平台里的"分享 → 复制链接"重新取一次地址'];
+  } else if (/unable to download webpage|failed to resolve|getaddrinfo|timed out|temporary failure|connection/i.test(raw)) {
+    title = '网络请求失败';
+    reasons = ['无法访问平台页面，可能是网络不通、DNS 异常或需要代理'];
+    advice = ['确认本机能正常打开该平台网页后重试'];
+  }
+
+  const lines = [title];
+  for (const r of reasons) lines.push(`· ${r}`);
+  for (const a of advice) lines.push(`→ ${a}`);
+  if (cookieWarning) lines.push(`⚠ ${cookieWarning}`);
+  lines.push(`（yt-dlp: ${first}）`);
+  return lines.join('\n');
+}
+
 /** auto 时按优先级挑一个已安装、且本会话未失败过的浏览器 */
 function pickBrowser(preferred) {
   if (preferred && preferred !== 'auto' && preferred !== 'none') return preferred;
@@ -178,7 +306,14 @@ function runYtDlp(args, { timeout = 120_000 } = {}) {
  *
  * @returns {Promise<{stdout: string, cookies: string|null, warning: string|null}>}
  */
-async function runYtDlpWithCookies(args, browser, opts) {
+async function runYtDlpWithCookies(args, browser, opts = {}) {
+  // 导入的 cookies.txt 优先：它绕开了浏览器数据库锁定与 App-Bound 加密两重障碍
+  const file = resolveCookieFile(opts.cookieFile);
+  if (file) {
+    const stdout = await runYtDlp([...args, '--cookies', file], opts);
+    return { stdout, cookies: 'file', warning: null };
+  }
+
   const picked = pickBrowser(browser);
 
   if (!picked) {
@@ -196,7 +331,14 @@ async function runYtDlpWithCookies(args, browser, opts) {
     const warning =
       `无法读取 ${picked} 的 Cookie（${message.split('\n')[0].trim()}），已降级为不带登录态解析`;
 
-    return { stdout: await runYtDlp(args, opts), cookies: null, warning };
+    try {
+      return { stdout: await runYtDlp(args, opts), cookies: null, warning };
+    } catch (retryErr) {
+      // 降级后依然失败：把"登录态没拿到"这层事实附在错误上，
+      // 否则用户只会看到一句无头无尾的 yt-dlp 原文，无从判断该做什么
+      if (retryErr && typeof retryErr === 'object') retryErr.cookieWarning = warning;
+      throw retryErr;
+    }
   }
 }
 
@@ -223,12 +365,13 @@ function mapExtractor(key) {
   return 'unknown';
 }
 
-async function ytDlpMetadata(url, browser) {
+async function ytDlpMetadata(url, browser, cookieFile) {
   // 非平台直链不需要登录态，跳过 Cookie 尝试可省掉一次无谓的失败重试
+  const needsLogin = isPlatformUrl(url);
   const { stdout, cookies, warning } = await runYtDlpWithCookies(
     ['--no-warnings', '--no-playlist', '--dump-json', url],
-    isPlatformUrl(url) ? browser : 'none',
-    { timeout: 120_000 },
+    needsLogin ? browser : 'none',
+    { timeout: 120_000, cookieFile: needsLogin ? cookieFile : null },
   );
   // 播放列表场景下会输出多行，取第一行
   const line = stdout.split('\n').find((l) => l.trim().startsWith('{'));
@@ -375,7 +518,7 @@ function spawnDownload({ id, args, dir, base, win }) {
 }
 
 async function startDownload(payload, win) {
-  const { id, url, sourceUrl, filename, cookieBrowser, dir: preferredDir } = payload;
+  const { id, url, sourceUrl, filename, cookieBrowser, cookieFile, dir: preferredDir } = payload;
   if (!url) throw new Error('缺少下载链接');
 
   // 原始页面链接优先：让 yt-dlp 自己选最佳格式并用 FFmpeg 合并音视频
@@ -397,7 +540,26 @@ async function startDownload(payload, win) {
     output,
   ];
 
-  const picked = pickBrowser(isPlatformUrl(target) ? cookieBrowser : 'none');
+  const loginTarget = isPlatformUrl(target);
+  const cookieFilePath = loginTarget ? resolveCookieFile(cookieFile) : null;
+
+  // 导入的 cookies.txt 优先（理由同 runYtDlpWithCookies）
+  if (cookieFilePath) {
+    try {
+      return await spawnDownload({
+        id,
+        dir,
+        base,
+        win,
+        args: [...baseArgs, '--cookies', cookieFilePath, target],
+      });
+    } catch (err) {
+      // Cookie 文件过期/失效不该让下载直接失败，退回匿名再试一次
+      if (!/cookie/i.test(String((err && err.message) || ''))) throw err;
+    }
+  }
+
+  const picked = pickBrowser(loginTarget ? cookieBrowser : 'none');
 
   if (picked) {
     try {
@@ -828,10 +990,21 @@ function registerIpcHandlers(opts = {}) {
   });
 
   ipcMain.handle('cineflow:parse', async (_event, payload) => {
+    const url = (payload && payload.url) || '';
     try {
-      return await ytDlpMetadata(payload.url, payload.cookieBrowser);
+      const data = await ytDlpMetadata(url, payload && payload.cookieBrowser, payload && payload.cookieFile);
+      return { ok: true, data };
     } catch (err) {
-      throw new Error(err && err.message ? err.message : '解析失败');
+      // 返回结构化失败而不是 throw：throw 会被 Electron 包成
+      // "Error invoking remote method 'cineflow:parse': Error: ..."，
+      // 既难看又把真正的原因埋在后面。
+      return {
+        ok: false,
+        error: describeYtDlpError(err && err.message, {
+          url,
+          cookieWarning: (err && err.cookieWarning) || null,
+        }),
+      };
     }
   });
 
@@ -840,7 +1013,12 @@ function registerIpcHandlers(opts = {}) {
     try {
       return await startDownload(payload, win);
     } catch (err) {
-      return { ok: false, error: err && err.message ? err.message : '下载失败' };
+      return {
+        ok: false,
+        error: describeYtDlpError(err && err.message, {
+          url: (payload && (payload.sourceUrl || payload.url)) || '',
+        }),
+      };
     }
   });
 
@@ -886,6 +1064,27 @@ function registerIpcHandlers(opts = {}) {
     effective: resolveDownloadDir(null),
   }));
 
+  ipcMain.handle('cineflow:pick-cookies', async () => {
+    const win = getWindow();
+    const res = await dialog.showOpenDialog(win || undefined, {
+      properties: ['openFile'],
+      filters: [
+        { name: 'Cookie 文件 (cookies.txt)', extensions: ['txt'] },
+        { name: '全部文件', extensions: ['*'] },
+      ],
+      title: '选择导出的 cookies.txt',
+      buttonLabel: '用这个文件',
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    const info = inspectCookieFile(res.filePaths[0]);
+    return { path: res.filePaths[0], ...info };
+  });
+
+  ipcMain.handle('cineflow:cookie-info', async (_event, payload) => {
+    const info = inspectCookieFile(payload && payload.path);
+    return { path: (payload && payload.path) || null, ...info };
+  });
+
   ipcMain.handle('cineflow:feed', async () => {
     if (feedState.latest) return feedState.latest;
     try {
@@ -925,6 +1124,9 @@ module.exports = {
   pickBrowserAny,
   cookieStatus,
   isCookieError,
+  resolveCookieFile,
+  inspectCookieFile,
+  describeYtDlpError,
   resolveBinary,
   binaryExists,
   defaultDownloadDir,

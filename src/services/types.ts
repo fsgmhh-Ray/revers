@@ -32,6 +32,10 @@ export interface EngineCapabilities {
 export interface ParseRequest {
   url: string;
   platform: PlatformType;
+  /** 桌面端专用：从哪个浏览器读取登录态，auto 交给 yt-dlp 自行探测 */
+  cookieBrowser?: string;
+  /** 桌面端专用：显式导入的 cookies.txt 路径，优先级高于 cookieBrowser */
+  cookieFile?: string;
   signal?: AbortSignal;
 }
 
@@ -44,6 +48,8 @@ export interface DownloadRequest {
   metadata?: VideoMetadata;
   /** 桌面端专用：从哪个浏览器读取登录态，auto 交给 yt-dlp 自行探测 */
   cookieBrowser?: string;
+  /** 桌面端专用：显式导入的 cookies.txt 路径，优先级高于 cookieBrowser */
+  cookieFile?: string;
   /** 桌面端专用：下载目录；留空则用默认目录 */
   dir?: string;
   /** 桌面端专用：拿到最终落盘路径后回调，供 UI 显示位置并一键打开 */

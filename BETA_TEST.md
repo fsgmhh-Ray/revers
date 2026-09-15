@@ -1,9 +1,10 @@
 # 内测指南（BETA）
 
-> 版本：插件 `0.1.0` · 桌面端 `0.2.0`
+> 版本：插件 `0.1.0` · 桌面端 `0.2.1`
 > 目标：在**不发布到 Chrome 商店**的前提下，把两条本机链路（插件 / 桌面端）跑通并收集问题。
 > 上架（Chrome Web Store）押后到本指南的验证清单全部通过之后。
 > 0.2.0 新增：**分镜逆向拆解**（本机 FFmpeg 抽帧）、**下载目录自选**、下载位置可见。
+> 0.2.1 新增：**导入 cookies.txt 提供登录态**（短剧 / 限区 / 需登录内容）、yt-dlp 报错翻译成人话。
 
 ---
 
@@ -72,7 +73,7 @@ C:\Users\Administrator\WorkBuddy\2026-09-11-12-52-39\reverse.cineflowing.com\ext
 安装包（未签名，Windows 会提示"未知发布者"，允许即可）：
 
 ```
-C:\Users\Administrator\WorkBuddy\2026-09-11-12-52-39\reverse.cineflowing.com\desktop\dist\Cineflowing Reverse Setup 0.2.0.exe
+C:\Users\Administrator\WorkBuddy\2026-09-11-12-52-39\reverse.cineflowing.com\desktop\dist\Cineflowing Reverse Setup 0.2.1.exe
 ```
 
 ### 2.2 验证清单
@@ -104,16 +105,34 @@ C:\Users\Administrator\WorkBuddy\2026-09-11-12-52-39\reverse.cineflowing.com\des
 - [ ] 点 **导出 Markdown / CSV / JSON** → 浏览器下载出文件，内容与界面一致
 - [ ] 未下载就点「一键拆解」→ 给出"请先下载到本机"的提示，而不是静默失败
 
+**短剧 / 需登录内容（0.2.1 新增）**
+
+TikTok 短剧（`dramaInfo` 剧集）、限区内容、年龄限制内容，**匿名请求拿不到播放地址** ——
+TikTok 只把 `playAddr` 发给有权限的账号（实测抓到的剧集页 `playAddr` / `downloadAddr` / `bitrateInfo` 全为空，
+但 `statusCode` 仍是 0，即"内容正常但不对你开放"）。要下载这类内容必须提供登录态。
+
+- [ ] 未导入 cookies.txt 时解析短剧 → 报错**不再是**光秃秃的 `No video formats found!`，
+      而是中文说明（指出是短剧/限权内容 + 给出下一步）
+- [ ] 用浏览器扩展（如 "Get cookies.txt LOCALLY"）导出**已登录 TikTok** 的 cookies.txt
+- [ ] 右上角齿轮 → 「登录态（cookies.txt）」→ **导入 cookies.txt…** → 显示「有效 · N 条 Cookie」
+- [ ] 若提示「不含 tiktok.com」→ 说明导出时没在 TikTok 域下，回去重新导出
+- [ ] 再次解析该短剧 → 能出画质选项即登录态生效
+- [ ] **清除** → 回到未导入状态
+
 ### 2.3 已知限制（内测期）
 
 **链路相关**
 
-- 首次解析 YouTube 会尝试读 Chrome 的 Cookie。**Chrome 正在运行时**或
-  Chrome 127+ 的 App-Bound 加密（yt-dlp #7271）可能导致读取失败 ——
-  已做降级：自动去掉 Cookie 重试，只是成功率下降，不会整体报错。
+- ⚠️ **Chrome / Edge 的 Cookie 直接读取在本机已失效**，是双重原因：
+  ① 浏览器运行时独占锁定 Cookies 数据库（连复制都失败，yt-dlp #7271）；
+  ② Local State 里存在 `app_bound_encrypted_key`，即启用了 App-Bound 加密，密文在浏览器进程外解不开。
+  **关掉浏览器只能绕过 ①，绕不过 ②。** 所以「读取登录态的浏览器」只作兜底，
+  需要登录态时请用「导入 cookies.txt」。
 - 安装包未做代码签名，SmartScreen 会拦一次，属预期。
 - **「双击能开窗」这一环在无桌面环境里无法验收**，逻辑层（二进制定位、
-  yt-dlp/ffmpeg 可执行、IPC 契约、分镜管线）已全部自动化验证通过。
+  yt-dlp/ffmpeg 可执行、IPC 契约、分镜管线、cookies.txt 校验）已全部自动化验证通过。
+- cookies.txt 会过期（尤其 `sessionid`）。解析突然又失败时，先重新导出一次再排查其它原因。
+- 导入 cookies.txt 后，**浏览器登录态不会被自动同步**，需要重新导出导入。
 
 **分镜相关（重要，别误判成 bug）**
 
@@ -128,7 +147,7 @@ C:\Users\Administrator\WorkBuddy\2026-09-11-12-52-39\reverse.cineflowing.com\des
 
 ```bash
 cd desktop
-npm run smoke            # 25 项契约断言，含 yt-dlp/ffmpeg 探测
+npm run smoke            # 35 项契约断言，含 yt-dlp/ffmpeg 探测、cookies.txt 校验、报错翻译
 npm run storyboard       # 合成三场景视频，真跑场景切分 + 抽帧（13 项）
 npm run probe:packaged   # 验证打包后二进制定位（asar 解包路径）
 ```
@@ -181,7 +200,7 @@ npm run probe:packaged   # 验证打包后二进制定位（asar 解包路径）
 | --- | --- |
 | 插件源码（加载已解压用） | `extension/` |
 | 插件分发包 zip | `extension/dist/cineflowing-reverse-0.1.0.zip` |
-| 桌面端安装包 | `desktop/dist/Cineflowing Reverse Setup 0.2.0.exe` |
+| 桌面端安装包 | `desktop/dist/Cineflowing Reverse Setup 0.2.1.exe` |
 | 插件商店文案 | `extension/STORE_LISTING.md` |
 | 隐私政策页 | `public/privacy.html` → <https://reverse.cineflowing.com/privacy.html> |
 

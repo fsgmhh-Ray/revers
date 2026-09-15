@@ -3,7 +3,7 @@ import type { EngineState } from '../hooks/useEngine';
 import type { Settings } from '../hooks/useSettings';
 import { ENGINE_META, type EngineKind } from '../services/types';
 import type { EnginePreference } from '../services/engineRouter';
-import { getElectronAPI } from '../services/electronBridge';
+import { getElectronAPI, type CookieFileInfo } from '../services/electronBridge';
 import type { GatewayHealth } from './Header';
 import { IconClose, IconRefresh } from './Icons';
 
@@ -67,6 +67,7 @@ function Toggle({
 
 export function SettingsPanel({ open, settings, health, engine, onClose, onChange, onReset }: Props) {
   const [effectiveDir, setEffectiveDir] = useState('');
+  const [cookieFileInfo, setCookieFileInfo] = useState<CookieFileInfo | null>(null);
   const desktopReady = engine.capabilities.some((c) => c.kind === 'electron' && c.available);
 
   // 只在桌面端可用时才去问默认目录，避免网页端无谓的探测
@@ -86,7 +87,40 @@ export function SettingsPanel({ open, settings, health, engine, onClose, onChang
     };
   }, [desktopReady]);
 
+  // 打开设置或换了文件时校验一次：Cookie 会过期，不能只记路径就假定它还有效
+  useEffect(() => {
+    if (!desktopReady || !settings.cookieFile) {
+      setCookieFileInfo(null);
+      return;
+    }
+    const api = getElectronAPI();
+    if (!api) return;
+    let alive = true;
+    api
+      .cookieInfo({ path: settings.cookieFile })
+      .then((info) => {
+        if (alive) setCookieFileInfo(info);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [desktopReady, settings.cookieFile]);
+
   if (!open) return null;
+
+  const importCookies = async () => {
+    const api = getElectronAPI();
+    if (!api) return;
+    const info = await api.pickCookies();
+    if (!info) return; // 用户取消
+    if (!info.ok) {
+      setCookieFileInfo(info);
+      return;
+    }
+    onChange('cookieFile', info.path || '');
+    setCookieFileInfo(info);
+  };
 
   const chooseDir = async () => {
     const api = getElectronAPI();
@@ -215,20 +249,26 @@ export function SettingsPanel({ open, settings, health, engine, onClose, onChang
             </div>
 
             {engine.active === 'electron' && (
-              <label className="mt-2.5 flex items-center justify-between rounded-xl border border-white/5 bg-white/[.02] px-3 py-2.5">
-                <span className="text-[12.5px] text-slate-200">读取登录态的浏览器</span>
-                <select
-                  className="field !w-auto !py-1 text-[12px]"
-                  value={settings.cookieBrowser}
-                  onChange={(e) => onChange('cookieBrowser', e.target.value)}
-                >
-                  {['auto', 'chrome', 'edge', 'firefox', 'brave', 'vivaldi', 'safari'].map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="mt-2.5 rounded-xl border border-white/5 bg-white/[.02] px-3 py-2.5">
+                <label className="flex items-center justify-between">
+                  <span className="text-[12.5px] text-slate-200">读取登录态的浏览器</span>
+                  <select
+                    className="field !w-auto !py-1 text-[12px]"
+                    value={settings.cookieBrowser}
+                    onChange={(e) => onChange('cookieBrowser', e.target.value)}
+                  >
+                    {['auto', 'chrome', 'edge', 'firefox', 'brave', 'vivaldi', 'safari'].map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="mt-1.5 text-[10.5px] leading-relaxed text-slate-600">
+                  仅在未导入 cookies.txt 时生效。Chrome / Edge 127+ 因 App-Bound 加密基本读不出来，
+                  此时请改用上面的「导入 cookies.txt」。
+                </p>
+              </div>
             )}
           </section>
 
@@ -304,6 +344,65 @@ export function SettingsPanel({ open, settings, health, engine, onClose, onChang
                   >
                     打开文件夹
                   </button>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {desktopReady && (
+            <section className="mb-6">
+              <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                登录态（cookies.txt）
+              </h3>
+              <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
+                TikTok 短剧、限区内容、需要登录的视频，必须带登录态才能拿到播放地址。
+                Chrome 127+ 起启用了 App-Bound 加密，<strong className="text-slate-400">直接读浏览器 Cookie 已基本失效</strong>
+                （数据库被锁 + 密文解不开），所以推荐用浏览器扩展导出 cookies.txt 后在这里导入。
+              </p>
+              <div className="rounded-xl border border-white/5 bg-white/[.02] p-3">
+                {settings.cookieFile ? (
+                  <>
+                    <p className="break-all font-mono text-[11px] leading-relaxed text-slate-300">
+                      {settings.cookieFile}
+                    </p>
+                    <p className="mt-1 text-[10.5px]">
+                      {cookieFileInfo && !cookieFileInfo.ok ? (
+                        <span className="text-rose-300">不可用：{cookieFileInfo.error}</span>
+                      ) : (
+                        <span className="text-emerald-300">
+                          有效 · {cookieFileInfo?.count ?? '…'} 条 Cookie
+                          {cookieFileInfo && !cookieFileInfo.hasTikTok && (
+                            <span className="text-amber-300">（不含 tiktok.com，短剧仍会失败）</span>
+                          )}
+                        </span>
+                      )}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-[11px] text-slate-500">
+                    未导入 —— 此时由下方「读取登录态的浏览器」尝试，但在 Chrome 127+ 上大概率失败。
+                  </p>
+                )}
+                <div className="mt-2.5 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn-ghost !py-1.5 !text-[11.5px]"
+                    onClick={() => void importCookies()}
+                  >
+                    导入 cookies.txt…
+                  </button>
+                  {settings.cookieFile && (
+                    <button
+                      type="button"
+                      className="btn-ghost !py-1.5 !text-[11.5px]"
+                      onClick={() => {
+                        onChange('cookieFile', '');
+                        setCookieFileInfo(null);
+                      }}
+                    >
+                      清除
+                    </button>
+                  )}
                 </div>
               </div>
             </section>

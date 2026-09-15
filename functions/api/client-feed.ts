@@ -30,12 +30,13 @@ interface PromoItem {
 }
 
 const FEED = {
-  latestVersion: '0.2.0',
+  latestVersion: '0.2.1',
   minVersion: '0.1.0',
   heartbeatIntervalSec: 45,
   upgrade: {
-    title: '客户端 0.2.0 已发布：分镜逆向 + 下载目录自选',
-    notes: '新增本地 FFmpeg 场景切分与关键帧抽取，可导出分镜表；下载位置可自选，并可一键打开文件所在文件夹。',
+    title: '客户端 0.2.1：支持导入 cookies.txt，短剧/限区内容可下载',
+    notes:
+      '新增「设置 → 登录态」：导入浏览器扩展导出的 cookies.txt，即可为 TikTok 短剧、限区或需登录的内容提供登录态（Chrome 127+ 起直接读浏览器 Cookie 已失效）。同时把 yt-dlp 的原始报错翻译成可执行的中文说明。',
     url: 'https://github.com/fsgmhh-Ray/revers/releases',
   },
   // 常驻推广条：主站 / 活动 / 广告位

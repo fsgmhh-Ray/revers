@@ -66,6 +66,8 @@ export function useTaskManager(
         const data = await engine.parse({
           url: task.inputUrl,
           platform: detectPlatform(task.inputUrl),
+          cookieBrowser: settingsRef.current.cookieBrowser,
+          cookieFile: settingsRef.current.cookieFile || undefined,
           signal: ensureController().signal,
         });
         updateTask(task.id, { parseStatus: 'success', data, errorMsg: undefined });
@@ -169,6 +171,7 @@ export function useTaskManager(
           referer: task.data.originalUrl,
           metadata: task.data,
           cookieBrowser: settingsRef.current.cookieBrowser,
+          cookieFile: settingsRef.current.cookieFile || undefined,
           dir: settingsRef.current.downloadDir || undefined,
           onSaved: (p) => {
             savedPath = p;
@@ -223,6 +226,7 @@ export function useTaskManager(
               referer: task.data!.originalUrl,
               metadata: task.data!,
               cookieBrowser: settingsRef.current.cookieBrowser,
+              cookieFile: settingsRef.current.cookieFile || undefined,
               dir: settingsRef.current.downloadDir || undefined,
               onSaved: (p) => {
                 savedPath = p;

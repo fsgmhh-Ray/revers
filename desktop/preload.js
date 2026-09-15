@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   reveal: (payload) => ipcRenderer.invoke('cineflow:reveal', payload),
   pickDir: (payload) => ipcRenderer.invoke('cineflow:pick-dir', payload),
   defaultDir: () => ipcRenderer.invoke('cineflow:default-dir'),
+  // 登录态：导入浏览器扩展导出的 cookies.txt（Chrome 127+ 无法直接读浏览器数据库）
+  pickCookies: () => ipcRenderer.invoke('cineflow:pick-cookies'),
+  cookieInfo: (payload) => ipcRenderer.invoke('cineflow:cookie-info', payload),
   // Stage 2：本地 FFmpeg 分镜逆向
   storyboard: (payload) => ipcRenderer.invoke('cineflow:storyboard', payload),
   onStoryboardProgress: (handler) => {

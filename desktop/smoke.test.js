@@ -14,6 +14,8 @@
  */
 
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 
 // 前置守卫：若环境里存在 ELECTRON_RUN_AS_NODE=1，electron.exe 会退化成纯 Node，
 // 此时 require('electron') 只会返回一个路径字符串（app 为 undefined）。
@@ -33,7 +35,7 @@ if (!app || typeof app.whenReady !== 'function') {
   process.exit(3);
 }
 
-const { registerIpcHandlers, VERSION } = require('./ipc');
+const { registerIpcHandlers, VERSION, describeYtDlpError, inspectCookieFile } = require('./ipc');
 
 /** 期望 preload 暴露的全部方法（与 src/services/electronBridge.ts 的 ElectronAPI 对齐） */
 const EXPECTED_API = [
@@ -44,6 +46,8 @@ const EXPECTED_API = [
   'reveal',
   'pickDir',
   'defaultDir',
+  'pickCookies',
+  'cookieInfo',
   'storyboard',
   'onStoryboardProgress',
   'onDownloadProgress',
@@ -130,6 +134,53 @@ app.whenReady().then(async () => {
     check('defaultDir() 返回对象', !!dirInfo && typeof dirInfo === 'object');
     check('defaultDir().dir 非空', !!(dirInfo && dirInfo.dir), String(dirInfo && dirInfo.dir));
     check('defaultDir().effective 可写', !!(dirInfo && dirInfo.effective), String(dirInfo && dirInfo.effective));
+
+    console.log('--- 登录态（cookies.txt 通道）---');
+    const noFile = await win.webContents.executeJavaScript(
+      'window.electronAPI.cookieInfo({ path: "Z:/__no_such_cookie_file__.txt" })',
+    );
+    check('cookieInfo() 对不存在的文件返回 ok:false', !!noFile && noFile.ok === false, JSON.stringify(noFile));
+    check('cookieInfo() 带错误说明', !!(noFile && noFile.error), String(noFile && noFile.error));
+
+    // 用真实文件验证校验器，而不是只信"格式对不对"的猜测
+    const tmpCookie = path.join(os.tmpdir(), 'cineflow-smoke-cookies.txt');
+    fs.writeFileSync(
+      tmpCookie,
+      [
+        '# Netscape HTTP Cookie File',
+        '# 这是注释行，不该被计入',
+        '',
+        '.tiktok.com\tTRUE\t/\tTRUE\t1999999999\tsessionid\tabc123',
+        '.tiktok.com\tTRUE\t/\tTRUE\t1999999999\ttt_csrf_token\tdef456',
+      ].join('\n'),
+      'utf8',
+    );
+    const cookieInfo = inspectCookieFile(tmpCookie);
+    check('inspectCookieFile 认可 Netscape 格式', cookieInfo.ok === true, JSON.stringify(cookieInfo));
+    check('inspectCookieFile 只数 Cookie 行（应为 2）', cookieInfo.count === 2, String(cookieInfo.count));
+    check('inspectCookieFile 识别出 tiktok.com', cookieInfo.hasTikTok === true);
+
+    fs.writeFileSync(tmpCookie, 'this is not a cookie file', 'utf8');
+    check('非 Cookie 文件被判为无效', inspectCookieFile(tmpCookie).ok === false);
+    fs.rmSync(tmpCookie, { force: true });
+    check('空白路径被判为无效', inspectCookieFile('').ok === false);
+
+    console.log('--- yt-dlp 报错翻译 ---');
+    // 纯函数，直接在主进程断言，不必跨 IPC
+    const noFmt = describeYtDlpError('ERROR: [TikTok] 7683668329: No video formats found!; please report', {
+      url: 'https://www.tiktok.com/@x/video/7683668329',
+    });
+    check('短剧类报错给出 TikTok 短剧判断', /短剧/.test(noFmt), noFmt.split('\n')[0]);
+    check('短剧类报错给出可行动建议', /cookies\.txt/.test(noFmt));
+    check('短剧类报错保留原始错误', /No video formats found/.test(noFmt));
+
+    const cookieErr = describeYtDlpError('ERROR: Could not copy Chrome cookie database. See ...', {
+      url: 'https://www.tiktok.com/@x/video/1',
+    });
+    check('Cookie 读取失败给出导入建议', /cookies\.txt/.test(cookieErr), cookieErr.split('\n')[0]);
+
+    const unknownErr = describeYtDlpError('some brand new yt-dlp failure', { url: 'https://example.com/a.mp4' });
+    check('未知报错回落到通用文案且不丢原文', /some brand new/.test(unknownErr), unknownErr.split('\n')[0]);
 
     console.log('--- 结果 ---');
     if (failures.length === 0) {

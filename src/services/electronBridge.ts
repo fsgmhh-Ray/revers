@@ -31,9 +31,35 @@ export interface ElectronDownloadResult {
 
 export type ElectronProgressHandler = (event: { id: string; percent: number; done: boolean; error?: string }) => void;
 
+/** 导入的 cookies.txt 校验结果 */
+export interface CookieFileInfo {
+  path: string | null;
+  ok: boolean;
+  /** Netscape 格式的 Cookie 条目数 */
+  count: number;
+  error?: string;
+  /** 文件里是否含 tiktok.com 的 Cookie */
+  hasTikTok?: boolean;
+}
+
+/**
+ * 解析结果。
+ *
+ * 桌面端刻意「返回失败」而不是「抛异常」—— 跨 IPC 抛出的错误会被 Electron 包一层
+ * "Error invoking remote method 'cineflow:parse': Error: ..."，
+ * 把真正的原因埋在噪音后面。失败的说明由主进程翻译成人话后再交回来。
+ */
+export type ElectronParseResult = { ok: true; data: VideoMetadata } | { ok: false; error: string };
+
 export interface ElectronAPI {
   hello(): Promise<ElectronHello>;
-  parse(payload: { url: string; platform: PlatformType }): Promise<VideoMetadata>;
+  parse(payload: {
+    url: string;
+    platform: PlatformType;
+    cookieBrowser?: string;
+    /** 优先使用这个 cookies.txt 里的登录态 */
+    cookieFile?: string;
+  }): Promise<ElectronParseResult>;
   download(payload: {
     id: string;
     url: string;
@@ -41,6 +67,8 @@ export interface ElectronAPI {
     filename: string;
     sourceUrl?: string;
     cookieBrowser?: string;
+    /** 优先使用这个 cookies.txt 里的登录态 */
+    cookieFile?: string;
     /** 下载目录；留空用默认目录 */
     dir?: string;
   }): Promise<ElectronDownloadResult>;
@@ -50,6 +78,10 @@ export interface ElectronAPI {
   pickDir(payload?: { current?: string }): Promise<string | null>;
   /** 默认下载目录与当前实际生效目录 */
   defaultDir(): Promise<{ dir: string; effective: string }>;
+  /** 弹出文件框挑选 cookies.txt，取消返回 null */
+  pickCookies(): Promise<CookieFileInfo | null>;
+  /** 校验一个 cookies.txt 路径是否仍然可用 */
+  cookieInfo(payload: { path: string }): Promise<CookieFileInfo>;
   /** Stage 2：本地 FFmpeg 分镜逆向 */
   storyboard(payload: {
     id: string;
@@ -90,8 +122,27 @@ export function createElectronEngine(caps: EngineCapabilities): Engine {
   return {
     capabilities: caps,
     async parse(req: ParseRequest): Promise<VideoMetadata> {
-      const data = await api.parse({ url: req.url, platform: req.platform });
-      if (!data?.downloadUrl) throw new EngineError('electron', '桌面端未返回可用直链');
+      // 兼容两代桌面端：新版返回 { ok, data | error }，旧版（≤0.2.0）直接返回 metadata。
+      // 网页包永远是最新的（部署在 Pages），而用户本机装的桌面端可能是旧版，两种形态都得认。
+      const res = (await api.parse({
+        url: req.url,
+        platform: req.platform,
+        cookieBrowser: req.cookieBrowser,
+        cookieFile: req.cookieFile,
+      })) as ElectronParseResult | VideoMetadata;
+
+      if ('ok' in res && res.ok === false) {
+        throw new EngineError('electron', res.error || '桌面端解析失败');
+      }
+
+      const data: VideoMetadata = 'data' in res && res.data ? res.data : (res as VideoMetadata);
+
+      if (!data?.downloadUrl) {
+        throw new EngineError(
+          'electron',
+          '解析到了视频信息，但没有可用的播放地址。该内容可能需要登录，或对当前地区不可见。',
+        );
+      }
       return data;
     },
     async download(req: DownloadRequest): Promise<void> {
@@ -120,6 +171,7 @@ export function createElectronEngine(caps: EngineCapabilities): Engine {
           filename: req.filename,
           sourceUrl: req.metadata?.originalUrl,
           cookieBrowser: req.cookieBrowser,
+          cookieFile: req.cookieFile,
           dir: req.dir,
         });
         if (!result.ok) throw new EngineError('electron', result.error || '桌面端下载失败');

@@ -13,6 +13,14 @@ export interface Settings {
   engine: EnginePreference;
   /** 桌面端读取哪个浏览器的登录态（chrome / edge / firefox …），auto 由 yt-dlp 自行尝试 */
   cookieBrowser: string;
+  /**
+   * 桌面端显式导入的 cookies.txt 路径（Netscape 格式）；空字符串 = 不导入。
+   *
+   * 为什么需要它：Chrome 127+ 启用 App-Bound 加密后，--cookies-from-browser
+   * 在 Windows 上基本失效（数据库被锁 + 密文解不开），导入文件是唯一稳定通道。
+   * 优先级高于 cookieBrowser。
+   */
+  cookieFile: string;
   /** 桌面端下载目录；空字符串 = 用默认目录（下载/Cineflowing） */
   downloadDir: string;
 }
@@ -27,6 +35,7 @@ const DEFAULTS: Settings = {
   filenamePattern: 'platform_author_title',
   engine: 'auto',
   cookieBrowser: 'auto',
+  cookieFile: '',
   downloadDir: '',
 };
 
