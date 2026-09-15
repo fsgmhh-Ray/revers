@@ -64,11 +64,18 @@ console.log('  app.asar.unpacked: ' + (report.asarUnpackedExists ? '存在' : '�
 console.log('  binDir          : ' + report.binDir);
 console.log('  yt-dlp.exe      : ' + (report.ytDlpExists ? '存在' : '缺失'));
 console.log('  ffmpeg.exe      : ' + (report.ffmpegExists ? '存在' : '缺失'));
+console.log('  ffprobe.exe     : ' + (report.ffprobeExists ? '存在' : '缺失'));
 console.log('  yt-dlp 版本     : ' + (report.ytDlpVersion || '(未能执行)'));
 console.log('  ffmpeg 版本     : ' + (report.ffmpegVersion || '(未能执行)'));
 
+console.log('\n[probe] Stage 2 分镜管线（用打包后 ffmpeg 真跑）：');
+console.log('  合成测试片      : ' + (report.storyboardTestVideo ? '成功' : '失败'));
+console.log('  场景切点        : ' + (report.storyboardCutCount ?? 0) + ' 个' + (report.storyboardOk ? '（预期 ≥2，通过）' : '（预期 ≥2，未达标）'));
+console.log('  ffprobe 读媒体  : ' + (report.ffprobeOk ? '正常' : '失败'));
+
 if (report.spawnError) console.log('  yt-dlp 错误     : ' + report.spawnError);
 if (report.ffmpegSpawnError) console.log('  ffmpeg 错误     : ' + report.ffmpegSpawnError);
+if (report.storyboardError) console.log('  分镜错误        : ' + report.storyboardError);
 
 console.log(report.ok ? '\nPROBE_OK' : '\nPROBE_FAIL');
 process.exit(report.ok ? 0 : 1);
