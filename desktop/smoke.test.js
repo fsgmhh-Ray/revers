@@ -43,6 +43,9 @@ const EXPECTED_API = [
   'cancel',
   'reveal',
   'pickDir',
+  'defaultDir',
+  'storyboard',
+  'onStoryboardProgress',
   'onDownloadProgress',
   'fetchFeed',
   'feedState',
@@ -120,6 +123,13 @@ app.whenReady().then(async () => {
     check('feedState.lastSync 为数字', feedState && typeof feedState.lastSync === 'number');
 
     check('pickDir 为函数（不实际弹窗）', apiKeys.includes('pickDir'));
+
+    console.log('--- 下载目录 ---');
+    const dirInfo = await win.webContents.executeJavaScript('window.electronAPI.defaultDir()');
+    console.log('SMOKE_DEFAULT_DIR=' + JSON.stringify(dirInfo));
+    check('defaultDir() 返回对象', !!dirInfo && typeof dirInfo === 'object');
+    check('defaultDir().dir 非空', !!(dirInfo && dirInfo.dir), String(dirInfo && dirInfo.dir));
+    check('defaultDir().effective 可写', !!(dirInfo && dirInfo.effective), String(dirInfo && dirInfo.effective));
 
     console.log('--- 结果 ---');
     if (failures.length === 0) {

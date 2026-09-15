@@ -16,7 +16,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   download: (payload) => ipcRenderer.invoke('cineflow:download', payload),
   cancel: (payload) => ipcRenderer.invoke('cineflow:cancel', payload),
   reveal: (payload) => ipcRenderer.invoke('cineflow:reveal', payload),
-  pickDir: () => ipcRenderer.invoke('cineflow:pick-dir'),
+  pickDir: (payload) => ipcRenderer.invoke('cineflow:pick-dir', payload),
+  defaultDir: () => ipcRenderer.invoke('cineflow:default-dir'),
+  // Stage 2：本地 FFmpeg 分镜逆向
+  storyboard: (payload) => ipcRenderer.invoke('cineflow:storyboard', payload),
+  onStoryboardProgress: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('cineflow:storyboard-progress', listener);
+    return () => ipcRenderer.removeListener('cineflow:storyboard-progress', listener);
+  },
   onDownloadProgress: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on('cineflow:download-progress', listener);

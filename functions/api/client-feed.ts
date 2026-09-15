@@ -30,12 +30,12 @@ interface PromoItem {
 }
 
 const FEED = {
-  latestVersion: '0.1.0',
+  latestVersion: '0.2.0',
   minVersion: '0.1.0',
   heartbeatIntervalSec: 45,
   upgrade: {
-    title: '客户端新版本 0.2.0 已发布',
-    notes: '提升 YouTube 1080p+ 音视频合并稳定性，并内置分镜逆向本地抽帧。',
+    title: '客户端 0.2.0 已发布：分镜逆向 + 下载目录自选',
+    notes: '新增本地 FFmpeg 场景切分与关键帧抽取，可导出分镜表；下载位置可自选，并可一键打开文件所在文件夹。',
     url: 'https://github.com/fsgmhh-Ray/revers/releases',
   },
   // 常驻推广条：主站 / 活动 / 广告位

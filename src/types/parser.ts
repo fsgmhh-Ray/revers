@@ -40,6 +40,11 @@ export interface TaskItem {
   data?: VideoMetadata;
   errorMsg?: string;
   createdAt: number;
+  /**
+   * 桌面端下载完成后的本地绝对路径。
+   * 有了它才能「打开所在文件夹」和「本地分镜拆解」（两者都需要真实文件）。
+   */
+  savedPath?: string;
 }
 
 export interface ParseResponse {

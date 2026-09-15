@@ -8,6 +8,7 @@
 
 import type { PlatformType, VideoMetadata } from '../types/parser';
 import type { ClientFeed, ConnectionState, FeedState } from '../types/clientFeed';
+import type { StoryboardProgress, StoryboardResult } from '../types/storyboard';
 import type { DownloadRequest, Engine, EngineCapabilities, ParseRequest } from './types';
 import { EngineError } from './types';
 
@@ -23,6 +24,8 @@ export interface ElectronHello {
 export interface ElectronDownloadResult {
   ok: boolean;
   path?: string;
+  /** 实际落盘目录（用户指定目录不可写时会自动退回） */
+  dir?: string;
   error?: string;
 }
 
@@ -38,9 +41,24 @@ export interface ElectronAPI {
     filename: string;
     sourceUrl?: string;
     cookieBrowser?: string;
+    /** 下载目录；留空用默认目录 */
+    dir?: string;
   }): Promise<ElectronDownloadResult>;
   cancel(payload: { id: string }): Promise<void>;
   reveal(payload: { path: string }): Promise<void>;
+  /** 弹出系统目录选择框，取消返回 null */
+  pickDir(payload?: { current?: string }): Promise<string | null>;
+  /** 默认下载目录与当前实际生效目录 */
+  defaultDir(): Promise<{ dir: string; effective: string }>;
+  /** Stage 2：本地 FFmpeg 分镜逆向 */
+  storyboard(payload: {
+    id: string;
+    path: string;
+    sceneThreshold?: number;
+    maxShots?: number;
+    frameWidth?: number;
+  }): Promise<StoryboardResult>;
+  onStoryboardProgress(handler: (event: StoryboardProgress) => void): () => void;
   onDownloadProgress(handler: ElectronProgressHandler): () => void;
   /** 运营投放（升级 / 广告 / 推广）拉取与订阅 */
   fetchFeed(): Promise<ClientFeed | null>;
@@ -102,8 +120,11 @@ export function createElectronEngine(caps: EngineCapabilities): Engine {
           filename: req.filename,
           sourceUrl: req.metadata?.originalUrl,
           cookieBrowser: req.cookieBrowser,
+          dir: req.dir,
         });
         if (!result.ok) throw new EngineError('electron', result.error || '桌面端下载失败');
+        // 把落盘路径交回业务层：UI 靠它显示"文件在哪"并支持一键打开
+        if (result.path) req.onSaved?.(result.path);
       } finally {
         unsubscribe();
       }

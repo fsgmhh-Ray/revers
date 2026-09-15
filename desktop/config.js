@@ -9,7 +9,7 @@ const path = require('node:path');
 const APP_URL = process.env.REVERSE_URL || 'https://reverse.cineflowing.com';
 
 /** 客户端版本号：升级判定依赖它，发版时必须与 src/config.ts 的 APP_VERSION 同步递增 */
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 /** 随包分发的 yt-dlp / ffmpeg 所在目录 */
 // 打包后代码运行在 app.asar 归档内，而子进程无法从 asar 里启动

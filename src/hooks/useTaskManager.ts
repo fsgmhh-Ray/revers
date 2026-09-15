@@ -160,6 +160,7 @@ export function useTaskManager(
         return;
       }
       updateTask(id, { downloadStatus: 'downloading', progress: 0, errorMsg: undefined });
+      let savedPath: string | undefined;
       try {
         await engine.download({
           taskId: id,
@@ -168,11 +169,15 @@ export function useTaskManager(
           referer: task.data.originalUrl,
           metadata: task.data,
           cookieBrowser: settingsRef.current.cookieBrowser,
+          dir: settingsRef.current.downloadDir || undefined,
+          onSaved: (p) => {
+            savedPath = p;
+          },
           onProgress: (percent) => updateTask(id, { progress: percent }),
           signal: ensureController().signal,
         });
-        updateTask(id, { downloadStatus: 'completed', progress: 100 });
-        notify(`${task.data.title || '视频'} 已保存`, 'success');
+        updateTask(id, { downloadStatus: 'completed', progress: 100, savedPath });
+        notify(savedPath ? `已保存到 ${savedPath}` : `${task.data.title || '视频'} 已保存`, 'success');
       } catch (err: any) {
         if (err?.name === 'AbortError') {
           updateTask(id, { downloadStatus: 'pending', progress: 0 });
@@ -209,6 +214,7 @@ export function useTaskManager(
       if (engine && engineKindRef.current !== 'cloud') {
         // 桌面端 / 插件链路：由原生下载器接管，支持大文件与断点续传
         await runPool(queue, settingsRef.current.downloadConcurrency, async (task) => {
+          let savedPath: string | undefined;
           try {
             await engine.download({
               taskId: task.id,
@@ -217,10 +223,14 @@ export function useTaskManager(
               referer: task.data!.originalUrl,
               metadata: task.data!,
               cookieBrowser: settingsRef.current.cookieBrowser,
+              dir: settingsRef.current.downloadDir || undefined,
+              onSaved: (p) => {
+                savedPath = p;
+              },
               onProgress: (percent) => updateTask(task.id, { progress: percent }),
               signal: controller.signal,
             });
-            updateTask(task.id, { downloadStatus: 'completed', progress: 100 });
+            updateTask(task.id, { downloadStatus: 'completed', progress: 100, savedPath });
           } catch (err: any) {
             updateTask(task.id, {
               downloadStatus: 'failed',

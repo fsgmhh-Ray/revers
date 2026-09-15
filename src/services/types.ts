@@ -44,6 +44,10 @@ export interface DownloadRequest {
   metadata?: VideoMetadata;
   /** 桌面端专用：从哪个浏览器读取登录态，auto 交给 yt-dlp 自行探测 */
   cookieBrowser?: string;
+  /** 桌面端专用：下载目录；留空则用默认目录 */
+  dir?: string;
+  /** 桌面端专用：拿到最终落盘路径后回调，供 UI 显示位置并一键打开 */
+  onSaved?: (path: string) => void;
   onProgress?: (percent: number) => void;
   signal?: AbortSignal;
 }

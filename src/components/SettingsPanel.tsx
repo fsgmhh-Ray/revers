@@ -1,7 +1,9 @@
+import { useEffect, useState } from 'react';
 import type { EngineState } from '../hooks/useEngine';
 import type { Settings } from '../hooks/useSettings';
 import { ENGINE_META, type EngineKind } from '../services/types';
 import type { EnginePreference } from '../services/engineRouter';
+import { getElectronAPI } from '../services/electronBridge';
 import type { GatewayHealth } from './Header';
 import { IconClose, IconRefresh } from './Icons';
 
@@ -64,7 +66,43 @@ function Toggle({
 }
 
 export function SettingsPanel({ open, settings, health, engine, onClose, onChange, onReset }: Props) {
+  const [effectiveDir, setEffectiveDir] = useState('');
+  const desktopReady = engine.capabilities.some((c) => c.kind === 'electron' && c.available);
+
+  // 只在桌面端可用时才去问默认目录，避免网页端无谓的探测
+  useEffect(() => {
+    if (!desktopReady) return;
+    const api = getElectronAPI();
+    if (!api) return;
+    let alive = true;
+    api
+      .defaultDir()
+      .then((r) => {
+        if (alive) setEffectiveDir(r?.effective || '');
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [desktopReady]);
+
   if (!open) return null;
+
+  const chooseDir = async () => {
+    const api = getElectronAPI();
+    if (!api) return;
+    const dir = await api.pickDir({ current: settings.downloadDir || effectiveDir });
+    if (dir) {
+      onChange('downloadDir', dir);
+      setEffectiveDir(dir);
+    }
+  };
+
+  const revealDir = () => {
+    const api = getElectronAPI();
+    const target = settings.downloadDir || effectiveDir;
+    if (api && target) void api.reveal({ path: target });
+  };
 
   const providerRows: { key: string; label: string; desc: string }[] = [
     { key: 'cobalt', label: 'Cobalt 自建内核', desc: '推荐。独立 VPS 部署，规避 YT / IG 对 Cloudflare 出口 IP 的封禁' },
@@ -229,6 +267,47 @@ export function SettingsPanel({ open, settings, health, engine, onClose, onChang
               />
             </div>
           </section>
+
+          {desktopReady && (
+            <section className="mb-6">
+              <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">下载位置</h3>
+              <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
+                桌面端把视频直接存到你本机，不经过浏览器的下载目录。可改成任意位置。
+              </p>
+              <div className="rounded-xl border border-white/5 bg-white/[.02] p-3">
+                <p className="break-all font-mono text-[11px] leading-relaxed text-slate-300">
+                  {settings.downloadDir || effectiveDir || '（读取中…）'}
+                </p>
+                {!settings.downloadDir && <p className="mt-1 text-[10.5px] text-slate-600">当前使用默认目录</p>}
+                <div className="mt-2.5 flex flex-wrap gap-2">
+                  <button type="button" className="btn-ghost !py-1.5 !text-[11.5px]" onClick={() => void chooseDir()}>
+                    选择目录…
+                  </button>
+                  {settings.downloadDir && (
+                    <button
+                      type="button"
+                      className="btn-ghost !py-1.5 !text-[11.5px]"
+                      onClick={() => {
+                        onChange('downloadDir', '');
+                        const api = getElectronAPI();
+                        if (api) void api.defaultDir().then((r) => setEffectiveDir(r?.effective || ''));
+                      }}
+                    >
+                      恢复默认
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn-ghost !py-1.5 !text-[11.5px]"
+                    onClick={revealDir}
+                    disabled={!(settings.downloadDir || effectiveDir)}
+                  >
+                    打开文件夹
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
 
           <section>
             <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">文件名规则</h3>

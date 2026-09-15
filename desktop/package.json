@@ -1,6 +1,6 @@
 {
   "name": "cineflowing-reverse-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "reverse.cineflowing.com 桌面端：本机 IP 解析 + 内置 yt-dlp/FFmpeg",
   "author": "Cineflowing",
@@ -9,14 +9,15 @@
     "start": "node scripts/run-electron.js .",
     "binaries": "node scripts/fetch-binaries.js",
     "icon": "node scripts/make-icon.js",
-    "check": "node --check main.js && node --check ipc.js && node --check config.js && node --check preload.js && node --check smoke.test.js && node --check parse.test.js",
+    "check": "node --check main.js && node --check ipc.js && node --check config.js && node --check preload.js && node --check smoke.test.js && node --check parse.test.js && node --check storyboard.test.js",
     "smoke": "node scripts/run-electron.js smoke.test.js",
     "parse": "node scripts/run-electron.js parse.test.js",
+    "storyboard": "node scripts/run-electron.js storyboard.test.js",
     "selfcheck": "node scripts/run-electron.js . --self-check",
     "probe:packaged": "node scripts/run-probe.js",
     "dist": "electron-builder",
     "pack": "electron-builder --dir",
-    "ci": "npm install && npm run binaries && npm run icon && npm run check && npm run smoke && npm run dist && npm run probe:packaged"
+    "ci": "npm install && npm run binaries && npm run icon && npm run check && npm run smoke && npm run storyboard && npm run dist && npm run probe:packaged"
   },
   "devDependencies": {
     "electron": "^31.0.0",

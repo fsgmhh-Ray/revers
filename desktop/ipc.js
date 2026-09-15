@@ -275,6 +275,38 @@ function defaultDownloadDir() {
   return dir;
 }
 
+/**
+ * 解析出真正可写的下载目录。
+ *
+ * 用户选的目录可能已经被删除、是只读盘、或被同步盘占用，所以不能直接信任，
+ * 必须 mkdir + 可写探测；失败就依次退回默认目录、系统下载目录。
+ * 返回值一定是「存在且可写」的路径，调用方可以放心交给 yt-dlp 的 -o。
+ */
+function resolveDownloadDir(preferred) {
+  const candidates = [];
+  if (typeof preferred === 'string' && preferred.trim()) candidates.push(preferred.trim());
+  candidates.push(defaultDownloadDir());
+
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.accessSync(dir, fs.constants.W_OK);
+      return dir;
+    } catch {
+      /* 该候选不可用，试下一个 */
+    }
+  }
+
+  // 兜底：系统下载目录通常一定可写；再不济交给系统临时目录
+  const fallback = path.join(os.homedir(), 'Downloads');
+  try {
+    fs.mkdirSync(fallback, { recursive: true });
+    return fallback;
+  } catch {
+    return os.tmpdir();
+  }
+}
+
 function isPlatformUrl(url) {
   return /tiktok\.com|instagram\.com|youtube\.com|youtu\.be|douyin\.com|xiaohongshu\.com/i.test(url || '');
 }
@@ -332,7 +364,8 @@ function spawnDownload({ id, args, dir, base, win }) {
       if (code === 0) {
         emit(100, true);
         const finalPath = lastFile && fs.existsSync(lastFile) ? lastFile : path.join(dir, `${base}.mp4`);
-        resolve({ ok: true, path: finalPath });
+        // 把目录一并回传，前端可以直接显示「文件在哪」并一键打开
+        resolve({ ok: true, path: finalPath, dir });
       } else {
         emit(100, false, stderr.trim() || `yt-dlp 退出码 ${code}`);
         reject(new Error(stderr.trim() || `yt-dlp 退出码 ${code}`));
@@ -342,12 +375,13 @@ function spawnDownload({ id, args, dir, base, win }) {
 }
 
 async function startDownload(payload, win) {
-  const { id, url, sourceUrl, filename, cookieBrowser } = payload;
+  const { id, url, sourceUrl, filename, cookieBrowser, dir: preferredDir } = payload;
   if (!url) throw new Error('缺少下载链接');
 
   // 原始页面链接优先：让 yt-dlp 自己选最佳格式并用 FFmpeg 合并音视频
   const target = isPlatformUrl(sourceUrl) ? sourceUrl : url;
-  const dir = defaultDownloadDir();
+  // 用户设置的目录优先；不可写时自动退回，绝不因为目录问题让下载失败
+  const dir = resolveDownloadDir(preferredDir);
   const base = (filename || 'video').replace(/\.mp4$/i, '');
   const output = path.join(dir, `${base}.%(ext)s`);
 
@@ -382,6 +416,276 @@ async function startDownload(payload, win) {
   }
 
   return spawnDownload({ id, dir, base, win, args: [...baseArgs, target] });
+}
+
+/* ------------------------------------------------------------------ */
+/* Stage 2：分镜逆向（本地 FFmpeg 场景切分 + 关键帧抽取）               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Stage 2 的「物理层」：把视频切成镜头、抽关键帧、给出时间轴与剪辑节奏。
+ *
+ * 为什么放在桌面端而不是云端：抽帧是纯算力活，本机 FFmpeg 免上传、
+ * 免带宽、免排队，长视频也不会卡在网络 IO 上。语义层（台词 / 画面描述 /
+ * Prompt 逆向）需要多模态大模型，走 `buildStoryboard` 之外的增强通道。
+ *
+ * 产物结构对齐前端既有契约 StoryboardNode（见 StoryboardDrawer.tsx）。
+ */
+
+const STORYBOARD_TMP = path.join(os.tmpdir(), 'cineflow-storyboard');
+
+/** 跑一个 ffmpeg / ffprobe 子进程；stdout 按二进制收集（抽帧可能用到） */
+function runFf(bin, args, { timeout = 300_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(resolveBinary(bin), args, { env: childEnv(), windowsHide: true });
+    const chunks = [];
+    let stderr = '';
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL');
+      reject(new Error(`${bin} 执行超时`));
+    }, timeout);
+
+    proc.stdout.on('data', (c) => chunks.push(c));
+    proc.stderr.on('data', (c) => {
+      stderr += c.toString();
+    });
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve({ stdout: Buffer.concat(chunks), stderr });
+      else {
+        const tail = stderr.trim().split('\n').filter(Boolean).pop() || `${bin} 退出码 ${code}`;
+        reject(new Error(tail));
+      }
+    });
+  });
+}
+
+/** 读取视频基础信息（时长 / 分辨率 / 帧率） */
+async function probeMedia(file) {
+  const { stdout } = await runFf(
+    'ffprobe',
+    [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height,r_frame_rate,duration',
+      '-show_entries', 'format=duration',
+      '-of', 'json',
+      file,
+    ],
+    { timeout: 60_000 },
+  );
+
+  let parsed = {};
+  try {
+    parsed = JSON.parse(stdout.toString('utf8'));
+  } catch {
+    parsed = {};
+  }
+  const stream = (parsed.streams && parsed.streams[0]) || {};
+  const fmt = parsed.format || {};
+
+  let fps = 0;
+  if (typeof stream.r_frame_rate === 'string' && stream.r_frame_rate.includes('/')) {
+    const [num, den] = stream.r_frame_rate.split('/').map(Number);
+    if (num && den) fps = num / den;
+  }
+
+  return {
+    width: Number(stream.width) || 0,
+    height: Number(stream.height) || 0,
+    fps: Math.round(fps * 100) / 100,
+    duration: Number(stream.duration || fmt.duration || 0),
+  };
+}
+
+/**
+ * 场景切分：检测镜头切换时间点。
+ *
+ * 先 `scale=320:-2` 再算 scene 分数 —— 缩略后再比较帧差，速度快一个数量级，
+ * 对"哪一帧是切换点"的判定几乎没有影响（差异是全画面级的）。
+ * showinfo 会把每帧信息打到 stderr，从中解析 pts_time 即切换时刻。
+ */
+async function detectScenes(file, threshold = 0.3) {
+  const th = Math.min(0.9, Math.max(0.05, Number(threshold) || 0.3));
+  const { stderr } = await runFf(
+    'ffmpeg',
+    [
+      '-hide_banner',
+      '-loglevel', 'info',
+      '-i', file,
+      '-filter:v', `scale=320:-2,select='gt(scene,${th})',showinfo`,
+      '-an',
+      '-f', 'null',
+      '-',
+    ],
+    { timeout: 600_000 },
+  );
+
+  const cuts = [];
+  const re = /pts_time:([0-9]+(?:\.[0-9]+)?)/g;
+  let m;
+  while ((m = re.exec(stderr)) !== null) {
+    const t = Number(m[1]);
+    if (Number.isFinite(t)) cuts.push(t);
+  }
+  return [...new Set(cuts)].sort((a, b) => a - b);
+}
+
+/** 抽某一时刻的帧，返回 data URL（前端可直接塞进 <img src>） */
+async function grabFrame(file, atSec, outPath, width = 480) {
+  await runFf(
+    'ffmpeg',
+    [
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-ss', String(Math.max(0, atSec)),
+      '-i', file,
+      '-frames:v', '1',
+      '-vf', `scale=${width}:-2`,
+      '-q:v', '4',
+      '-y',
+      outPath,
+    ],
+    { timeout: 60_000 },
+  );
+
+  if (!fs.existsSync(outPath)) throw new Error('抽帧失败：未生成图像');
+  const buf = fs.readFileSync(outPath);
+  if (!buf.length) throw new Error('抽帧失败：图像为空');
+  return `data:image/jpeg;base64,${buf.toString('base64')}`;
+}
+
+/**
+ * 没有语义模型时的镜头类型推断。
+ * 依据是剪辑时长——快切通常是特写/情绪镜头，长镜多为全景或空镜。
+ * 标注 inferred=true，UI 上明确区分「推断」与「AI 识别」。
+ */
+function inferShotType(seconds) {
+  if (seconds < 1.2) return '特写(CU)';
+  if (seconds < 2.5) return '近景(MCU)';
+  if (seconds < 5) return '中景(MS)';
+  return '全景(WS)';
+}
+
+function inferCamera(seconds) {
+  if (seconds < 0.8) return '快切(Cut)';
+  if (seconds < 4) return '固定(Static)';
+  return '缓推(Slow push)';
+}
+
+/** 把过密的切点抽稀到 maxShots 以内，保持时间上的均匀覆盖 */
+function thinEdges(edges, maxShots) {
+  if (edges.length - 1 <= maxShots) return edges;
+  const keep = [edges[0]];
+  const step = (edges.length - 1) / maxShots;
+  for (let k = 1; k < maxShots; k++) keep.push(edges[Math.round(k * step)]);
+  keep.push(edges[edges.length - 1]);
+  return [...new Set(keep)];
+}
+
+/**
+ * 主入口：视频 → 分镜节点数组。
+ *
+ * @param {{ id: string, path: string, sceneThreshold?: number, maxShots?: number, frameWidth?: number }} payload
+ */
+async function buildStoryboard(payload, win) {
+  const {
+    id = `sb_${Date.now()}`,
+    path: file,
+    sceneThreshold = 0.3,
+    maxShots = 48,
+    frameWidth = 480,
+  } = payload || {};
+
+  if (!file || !fs.existsSync(file)) {
+    throw new Error('找不到本地视频文件，请先下载到本机再拆解');
+  }
+
+  const send = (percent, stage) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('cineflow:storyboard-progress', { id, percent, stage });
+    }
+  };
+
+  send(2, '读取媒体信息');
+  const media = await probeMedia(file);
+  const duration = media.duration || 0;
+
+  send(12, '场景切分');
+  const cuts = await detectScenes(file, sceneThreshold);
+
+  // 边界：起点 + 切点 + 终点；过滤掉过近的切点，避免产生 0.1s 的碎片镜头
+  const raw = [0, ...cuts.filter((t) => !duration || t < duration - 0.15), duration || cuts[cuts.length - 1] + 1];
+  const edges = raw.filter((t, i, arr) => i === 0 || t - arr[i - 1] > 0.25);
+  const finalEdges = thinEdges(edges, Math.max(1, maxShots));
+
+  const dir = path.join(STORYBOARD_TMP, String(id).replace(/[^\w.-]/g, '_'));
+  fs.mkdirSync(dir, { recursive: true });
+
+  const shotCount = Math.max(0, finalEdges.length - 1);
+  const nodes = [];
+
+  for (let i = 0; i < shotCount; i++) {
+    const startMs = Math.round(finalEdges[i] * 1000);
+    const endMs = Math.round(finalEdges[i + 1] * 1000);
+    const seconds = (endMs - startMs) / 1000;
+    const mid = (finalEdges[i] + finalEdges[i + 1]) / 2;
+
+    // 抽帧占整体进度的大头（12% → 96%）
+    send(12 + Math.round(((i + 0.5) / shotCount) * 84), `抽取关键帧 ${i + 1}/${shotCount}`);
+
+    let thumbnailDataUrl = '';
+    try {
+      thumbnailDataUrl = await grabFrame(file, mid, path.join(dir, `f${i}.jpg`), frameWidth);
+    } catch {
+      // 单帧抽失败（损坏段 / 极短镜头）不该让整个拆解失败
+      thumbnailDataUrl = '';
+    }
+
+    nodes.push({
+      id: `${id}_${i}`,
+      index: i + 1,
+      startTime: startMs,
+      endTime: endMs,
+      duration: Math.round(seconds * 1000),
+      thumbnailUrl: thumbnailDataUrl,
+      shotType: inferShotType(seconds),
+      cameraMovement: inferCamera(seconds),
+      dialogue: '',
+      visualDescription: '',
+      aiPrompt: { imagePrompt: '', videoPrompt: '' },
+      inferred: true,
+    });
+  }
+
+  send(98, '汇总');
+  const avgShot = shotCount ? duration / shotCount : 0;
+  const cutRhythm = avgShot < 1.5 ? '快剪（平均 < 1.5s）' : avgShot < 3 ? '中速（平均 1.5–3s）' : '慢节奏（平均 > 3s）';
+
+  return {
+    ok: true,
+    id,
+    source: {
+      file,
+      duration: Math.round(duration * 1000),
+      width: media.width,
+      height: media.height,
+      fps: media.fps,
+    },
+    nodes,
+    stats: {
+      sceneCount: shotCount,
+      sceneThreshold: Math.min(0.9, Math.max(0.05, Number(sceneThreshold) || 0.3)),
+      avgShotDuration: Math.round(avgShot * 1000),
+      cutRhythm,
+      analyzedBy: 'local-ffmpeg',
+      note: '镜头类型/运镜由剪辑时长推断，台词与画面描述需接入多模态模型补全',
+    },
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -555,11 +859,32 @@ function registerIpcHandlers(opts = {}) {
     return { ok: true };
   });
 
-  ipcMain.handle('cineflow:pick-dir', async () => {
+  ipcMain.handle('cineflow:storyboard', async (event, payload) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    try {
+      return await buildStoryboard(payload, win);
+    } catch (err) {
+      return { ok: false, error: err && err.message ? err.message : '分镜拆解失败' };
+    }
+  });
+
+  ipcMain.handle('cineflow:pick-dir', async (_event, payload) => {
     const win = getWindow();
-    const res = await dialog.showOpenDialog(win || undefined, { properties: ['openDirectory'] });
+    // 从当前生效目录开始浏览，而不是每次从"文档"这种无关位置起步
+    const startIn = resolveDownloadDir(payload && payload.current);
+    const res = await dialog.showOpenDialog(win || undefined, {
+      properties: ['openDirectory', 'createDirectory'],
+      defaultPath: startIn,
+      title: '选择视频下载目录',
+      buttonLabel: '用这个目录',
+    });
     return res.canceled ? null : res.filePaths[0];
   });
+
+  ipcMain.handle('cineflow:default-dir', async () => ({
+    dir: defaultDownloadDir(),
+    effective: resolveDownloadDir(null),
+  }));
 
   ipcMain.handle('cineflow:feed', async () => {
     if (feedState.latest) return feedState.latest;
@@ -603,6 +928,15 @@ module.exports = {
   resolveBinary,
   binaryExists,
   defaultDownloadDir,
+  resolveDownloadDir,
+  // Stage 2 分镜逆向（供自测断言）
+  buildStoryboard,
+  probeMedia,
+  detectScenes,
+  grabFrame,
+  inferShotType,
+  thinEdges,
+  STORYBOARD_TMP,
   feedState,
   APP_URL,
   VERSION,

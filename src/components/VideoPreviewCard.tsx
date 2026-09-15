@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { TaskItem } from '../types/parser';
 import { platformMeta, formatBytes, formatDuration } from '../utils/platform';
 import { proxyUrl } from '../utils/downloader';
+import { getElectronAPI } from '../services/electronBridge';
 import {
   IconAlert,
   IconCopy,
@@ -38,6 +39,12 @@ export function VideoPreviewCard({ task, onRetry, onRemove, onDownload, onStoryb
     } catch {
       /* 忽略剪贴板权限失败 */
     }
+  };
+
+  /** 桌面端下载后才有本地路径；网页/插件链路没有，按钮不显示 */
+  const openFolder = () => {
+    const api = getElectronAPI();
+    if (api && task.savedPath) void api.reveal({ path: task.savedPath });
   };
 
   return (
@@ -148,6 +155,20 @@ export function VideoPreviewCard({ task, onRetry, onRemove, onDownload, onStoryb
         <p className="line-clamp-1 font-mono text-[10.5px] text-slate-600" title={task.inputUrl}>
           {task.inputUrl}
         </p>
+
+        {done && task.savedPath && (
+          <div className="rounded-lg border border-emerald-400/15 bg-emerald-400/[.04] px-2 py-1.5">
+            <p
+              className="line-clamp-2 break-all font-mono text-[10px] leading-relaxed text-emerald-200/70"
+              title={task.savedPath}
+            >
+              {task.savedPath}
+            </p>
+            <button className="mt-1 text-[10.5px] text-brand hover:underline" onClick={openFolder}>
+              打开所在文件夹
+            </button>
+          </div>
+        )}
 
         <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1">
           <button

@@ -13,6 +13,8 @@ export interface Settings {
   engine: EnginePreference;
   /** 桌面端读取哪个浏览器的登录态（chrome / edge / firefox …），auto 由 yt-dlp 自行尝试 */
   cookieBrowser: string;
+  /** 桌面端下载目录；空字符串 = 用默认目录（下载/Cineflowing） */
+  downloadDir: string;
 }
 
 const STORAGE_KEY = 'reverse-cineflowing:settings';
@@ -25,6 +27,7 @@ const DEFAULTS: Settings = {
   filenamePattern: 'platform_author_title',
   engine: 'auto',
   cookieBrowser: 'auto',
+  downloadDir: '',
 };
 
 function read(): Settings {
