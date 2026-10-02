@@ -105,6 +105,11 @@ export function StoryboardDrawer({
         sceneThreshold: threshold,
         maxShots: 48,
         frameWidth: 480,
+        // 传视觉 LLM 配置：桌面端会用本机 IP 调它补全画面描述与提示词
+        llmBaseUrl,
+        llmApiKey,
+        llmModel,
+        language: llmLanguage,
       });
       if (!res || !res.ok) {
         setStatus('error');

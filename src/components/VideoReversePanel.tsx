@@ -95,7 +95,16 @@ export function VideoReversePanel() {
 
       setLocalPath(dl.path);
       setLocalStage('本地抽帧拆解分镜');
-      const sb = await api.storyboard({ id: `sb_${Date.now()}`, path: dl.path, maxShots: 48, frameWidth: 480 });
+      const sb = await api.storyboard({
+        id: `sb_${Date.now()}`,
+        path: dl.path,
+        maxShots: 48,
+        frameWidth: 480,
+        llmBaseUrl: settings.llmBaseUrl,
+        llmApiKey: settings.llmApiKey,
+        llmModel: settings.llmModel,
+        language: settings.llmLanguage,
+      });
       if (!sb || !sb.ok) throw new Error((sb as any)?.error || '本地分镜拆解失败');
       setResult(sb);
       setPhase('success');
@@ -140,6 +149,39 @@ export function VideoReversePanel() {
     setPhase('analyzing');
     setError('');
     try {
+      // 桌面端：走本机 IP（解析→下载→本地分镜），避免云端内核的机房 IP 风控
+      // 与 Pages 墙钟限制。云端内核对 YouTube 会直接返回 bot check。
+      if (desktopReady) {
+        setLocalStage('解析并下载到本机');
+        const platform = detectPlatform(url.trim());
+        const parsed = await api!.parse({ url: url.trim(), platform });
+        if (!parsed.ok) throw new Error(parsed.error || '解析失败');
+        const fileName = `${safeName(parsed.data.title || 'video')}.mp4`;
+        const dl = await api!.download({
+          id: `rev_${Date.now()}`,
+          url: url.trim(),
+          platform,
+          filename: fileName,
+          sourceUrl: parsed.data.originalUrl,
+        });
+        if (!dl.ok || !dl.path) throw new Error(dl.error || '下载失败，未拿到本地文件');
+        setLocalPath(dl.path);
+        setLocalStage('本地抽帧拆解分镜');
+        const sb = await api!.storyboard({
+        id: `sb_${Date.now()}`,
+        path: dl.path,
+        maxShots: 24,
+        frameWidth: 480,
+        llmBaseUrl: settings.llmBaseUrl,
+        llmApiKey: settings.llmApiKey,
+        llmModel: settings.llmModel,
+        language: settings.llmLanguage,
+      });
+        if (!sb || !sb.ok) throw new Error((sb as any)?.error || '本地分镜拆解失败');
+        setResult(sb);
+        setPhase('success');
+        return;
+      }
       const data = await cloudStoryboard(url.trim(), llm, { maxShots: 24, frameWidth: 480 });
       if (data?.status === 'error') {
         setPhase('error');

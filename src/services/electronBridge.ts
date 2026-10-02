@@ -94,6 +94,11 @@ export interface ElectronAPI {
     sceneThreshold?: number;
     maxShots?: number;
     frameWidth?: number;
+    /** 视觉 LLM（可选）：提供则用本机 IP 调该模型补全画面描述与提示词 */
+    llmBaseUrl?: string;
+    llmApiKey?: string;
+    llmModel?: string;
+    language?: string;
   }): Promise<StoryboardResult>;
   /**
    * 完整旁白 / 语音转写（本地执行）。
