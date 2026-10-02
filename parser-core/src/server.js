@@ -41,6 +41,15 @@ const CACHE_TTL = Number(process.env.CACHE_TTL || 300) * 1000;
 /** YouTube / Instagram 对数据中心 IP 风控严重，挂载 cookies.txt 才能稳定解析 */
 const COOKIES_PATH = process.env.COOKIES_PATH || '/app/cookies.txt';
 const HAS_COOKIES = existsSync(COOKIES_PATH);
+/**
+ * 可选代理（形如 http://user:pass@host:port 或 socks5://…）。
+ * YouTube 对机房 IP 直接返回 "Sign in to confirm you're not a bot"，
+ * 换 player_client 无效（实测 7 种全被拦），必须让请求走住宅出口 IP。
+ * 配好后 yt-dlp 与直连下载都会带上该代理。
+ */
+const PROXY = (process.env.YTDLP_PROXY || '').trim();
+/** 单次 yt-dlp 解析超时（毫秒）。上游 Pages Functions 有墙钟限制，宁可快速失败也不要拖死网关。 */
+const YTDLP_TIMEOUT_MS = Number(process.env.YTDLP_TIMEOUT_MS || 20000);
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36';
 
@@ -78,10 +87,31 @@ function runYtDlp(args) {
     const child = spawn(YTDLP_PATH, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    // 上游（Cloudflare Pages Functions）有墙钟限制，内核必须快速失败，
+    // 否则网关先被平台杀掉，用户只会看到裸 502 而拿不到可读原因。
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* 已退出 */
+      }
+      reject(new Error(`yt-dlp 超时（>${Math.round(YTDLP_TIMEOUT_MS / 1000)}s），目标站点可能风控或网络过慢`));
+    }, YTDLP_TIMEOUT_MS);
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
-    child.on('error', reject);
+    child.on('error', (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(e);
+    });
     child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code !== 0) return reject(new Error(stderr.trim() || `yt-dlp exited with ${code}`));
       try {
         resolve(JSON.parse(stdout));
@@ -104,6 +134,33 @@ function pickBestFormat(info) {
   return { url: best.url, height: best.height, width: best.width, hasAudio: Boolean(best?.acodec && best.acodec !== 'none') };
 }
 
+/**
+ * 把 yt-dlp 原始英文报错转成可行动的中文提示。
+ * YouTube 的 "Sign in to confirm you're not a bot" 是机房 IP 风控（不是配置错），
+ * 换 player_client 无效，需要住宅代理或走桌面端（本机 IP）。
+ */
+function humanizeYtDlpError(raw, url) {
+  const msg = String(raw || '');
+  const isYT = /youtube\.com|youtu\.be/.test(url || '');
+  if (/not a bot|Sign in to confirm/i.test(msg)) {
+    return PROXY
+      ? 'YouTube 要求登录验证（机器人校验）。已配置代理仍被拦，请更换住宅代理或稍后重试。'
+      : 'YouTube 要求登录验证（机器人校验）：本机为机房 IP，YouTube 对数据中心出口风控严格，换解析线路无效。' +
+        '解决办法：① 给内核配置住宅代理（docker .env 设 YTDLP_PROXY=http://user:pass@host:port）；' +
+        '② 或改用「桌面端引擎」解析（走你自己的家宽 IP，无需任何配置）。';
+  }
+  if (/PO Token|po.?token|GVS PO Token/i.test(msg)) {
+    return 'YouTube 需要 PO Token 才能取流。给内核配置住宅代理通常可一并解决。';
+  }
+  if (isYT && /Private video|members-only|join this channel/i.test(msg)) {
+    return '该视频为会员/私享内容，需要登录 cookies 才能解析。';
+  }
+  if (/HTTP Error 4\d\d/.test(msg)) {
+    return `源站拒绝请求（${(msg.match(/HTTP Error \d+/) || [''])[0]}），可能是限流或该源临时不可用。`;
+  }
+  return msg.slice(0, 300);
+}
+
 async function parse(url) {
   const cached = cache.get(url);
   if (cached && cached.expiresAt > Date.now()) return cached.payload;
@@ -117,9 +174,15 @@ async function parse(url) {
     UA,
   ];
   if (HAS_COOKIES) args.push('--cookies', COOKIES_PATH);
+  if (PROXY) args.push('--proxy', PROXY);
   args.push('--extractor-args', 'youtube:player_client=android_vr,web_safari', url);
 
-  const info = await runYtDlp(args);
+  let info;
+  try {
+    info = await runYtDlp(args);
+  } catch (err) {
+    throw new Error(humanizeYtDlpError(err?.message || String(err), url));
+  }
 
   const best = pickBestFormat(info);
   if (!best?.url) {
@@ -173,7 +236,18 @@ function buildReferer(target) {
 
 const tmp = (ext) => join(tmpdir(), `cf_${randomUUID()}.${ext}`);
 
-/** 流式下载（直链可能绑定 IP，失败回退到内核自带的 /api/fetch 代理） */
+/** 流式下载（直链可能绑定 IP，失败回退到内核自带的 /api/fetch 代理）
+ *  若配置了 PROXY，Node 的 fetch 不自动读代理环境变量，这里显式挂 ProxyAgent。 */
+let proxyAgent = null;
+if (PROXY) {
+  try {
+    const { ProxyAgent, setGlobalDispatcher } = await import('undici');
+    proxyAgent = new ProxyAgent(PROXY);
+    setGlobalDispatcher(proxyAgent);
+  } catch {
+    /* undici 不可用则退回直连（仅解析走代理，下载可能因 IP 绑定失败） */
+  }
+}
 async function streamDownload(url, dest, headers = {}) {
   const res = await fetch(url, { headers, redirect: 'follow' });
   if (!res.ok || !res.body) throw new Error(`下载失败 HTTP ${res.status}`);

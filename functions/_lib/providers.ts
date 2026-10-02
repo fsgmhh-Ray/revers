@@ -112,21 +112,37 @@ async function cobaltProvider(url: string, platform: PlatformType, env: Env): Pr
   let payload: CobaltPayload | null = null;
   let lastError = '';
 
+  // Pages Functions 有 CPU/墙钟限制，yt-dlp 解析慢时会先被平台杀掉（CF 502），
+  // 这里主动设超时并把 AbortError 转成可读提示，避免用户只看到裸 502。
+  // 默认 8s：内核侧 yt-dlp 已设 20s 硬超时并会快速返回可读原因，这里只需留出
+  // 内核返回错误文本的余量即可（正常解析 <3s）。
+  const timeoutMs = Number(env.COBALT_TIMEOUT_MS || 8000);
   for (const path of ['/api/json', '/']) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
-      const res = await fetch(`${base}${path}`, { method: 'POST', headers, body });
+      const res = await fetch(`${base}${path}`, { method: 'POST', headers, body, signal: ac.signal });
       const text = await res.text();
       try {
         payload = JSON.parse(text) as CobaltPayload;
       } catch {
         lastError = `解析内核返回非 JSON（HTTP ${res.status}）`;
+        clearTimeout(timer);
         continue;
       }
-      if (res.ok && payload && payload.status !== 'error') break;
+      if (res.ok && payload && payload.status !== 'error') {
+        clearTimeout(timer);
+        break;
+      }
       lastError = payload?.text || `解析内核错误（HTTP ${res.status}）`;
     } catch (err: any) {
-      lastError = err?.message || '解析内核不可达';
+      if (err?.name === 'AbortError') {
+        lastError = `解析超时（>${Math.round(timeoutMs / 1000)}s）。目标站点风控或网络过慢，可稍后重试。`;
+      } else {
+        lastError = err?.message || '解析内核不可达';
+      }
     }
+    clearTimeout(timer);
   }
 
   if (!payload || payload.status === 'error') {

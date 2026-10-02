@@ -14,6 +14,15 @@ services:
       API_KEY: ${API_KEY:-}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
       CACHE_TTL: 300
+      # YouTube 对机房 IP 直接返回 "Sign in to confirm you're not a bot"（实测换
+      # player_client 无效）。填一个住宅代理即可绕过，形如：
+      #   http://user:pass@host:port  或  socks5://host:port
+      # 留空则直连（TikTok/IG/Douyin 等不受影响）。
+      YTDLP_PROXY: ${YTDLP_PROXY:-}
+      # 代理也要给 Node 下载直链用（googlevideo 直链绑定签发 IP）
+      HTTP_PROXY: ${YTDLP_PROXY:-}
+      HTTPS_PROXY: ${YTDLP_PROXY:-}
     # YouTube / Instagram 强风控：把浏览器导出的 cookies.txt 放到本目录后，启用下面两行
     # volumes:
     #   - ./cookies.txt:/app/cookies.txt:ro
+    # 若走代理（YTDLP_PROXY），把代理地址写到同目录 .env 即可，无需改本文件。
