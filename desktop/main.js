@@ -134,8 +134,42 @@ if (SELF_CHECK) {
   app.whenReady().then(() => {
     createWindow();
     startHeartbeat();
+  }).catch((err) => {
+    // 没有 catch 的话，createWindow() 抛错会变成「静默拒绝的 Promise」：
+    // 进程立刻退出且不打印任何东西，用户只看到双击没反应。
+    // 这里把原因落盘，便于事后定位。
+    const detail = {
+      phase: 'startup',
+      ok: false,
+      error: String((err && err.stack) || err),
+      execPath: process.execPath,
+      electron: process.versions.electron,
+      node: process.versions.node,
+    };
+    writeSelfCheckReport(detail);
+    try {
+      console.error('[startup] 启动失败：', detail.error);
+    } catch {
+      /* GUI 进程可能没有 stdout */
+    }
+    app.exit(1);
   });
 }
+
+// 进程级兜底：把未捕获异常落盘，避免「双击无反应」无从排查。
+process.on('uncaughtException', (err) => {
+  writeSelfCheckReport({
+    phase: 'uncaughtException',
+    ok: false,
+    error: String((err && err.stack) || err),
+    execPath: process.execPath,
+  });
+  try {
+    console.error('[uncaught]', err);
+  } catch {
+    /* ignore */
+  }
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
