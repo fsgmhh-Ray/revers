@@ -1,1 +1,0 @@
-{"status":"error","text":"视觉 LLM 调用失败 (HTTP 400): {\"object\":\"error\",\"message\":\"At most 1 image(s) may be provided in one request. You can set `--limit-mm-per-prompt` to increase this limit if the model supports it.\",\"type\":\"BadRequestError\",\"param\":null,\"code\":400}"}

@@ -13,3 +13,4 @@ parser-core/cookies.txt
 .DS_Store
 .vscode
 .idea
+_nimtmp/
