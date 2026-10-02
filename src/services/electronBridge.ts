@@ -53,8 +53,18 @@ export type ElectronParseResult = { ok: true; data: VideoMetadata } | { ok: fals
 
 /** 本地旁白转写结果（与主进程 buildNarration 的返回对应） */
 export type ElectronNarrationResult =
-  | { ok: true; id?: string; transcript: string; provider?: string; model?: string }
-  | { ok: false; error: string };
+  | {
+      ok: true;
+      id?: string;
+      transcript: string;
+      provider?: string;
+      model?: string;
+      /** subtitle = 直接取到字幕（秒级、免费、无误字）；asr = 抽音轨后语音转写 */
+      source?: 'subtitle' | 'asr';
+      /** 字幕语言（zh-Hans / en 等） */
+      lang?: string;
+    }
+  | { ok: false; error: string; /** 字幕没拿到且本地也没有文件 → 调用方需先下载音轨 */ needFile?: boolean };
 
 export interface ElectronAPI {
   hello(): Promise<ElectronHello>;
@@ -76,6 +86,11 @@ export interface ElectronAPI {
     cookieFile?: string;
     /** 下载目录；留空用默认目录 */
     dir?: string;
+    /**
+     * 只下载音轨（m4a）。只做旁白时用：30MB 的视频里真正用到的音轨只有 5MB 左右，
+     * 而下载是全链路最慢的一环。分镜拆解必须看画面，不能开这个。
+     */
+    audioOnly?: boolean;
   }): Promise<ElectronDownloadResult>;
   cancel(payload: { id: string }): Promise<void>;
   reveal(payload: { path: string }): Promise<void>;
@@ -109,6 +124,11 @@ export interface ElectronAPI {
   narration(payload: {
     id: string;
     path: string;
+    /** 原始页面链接：给了就先尝试直接抓字幕，拿不到才用 path 走 ASR */
+    url?: string;
+    sourceUrl?: string;
+    cookieFile?: string;
+    cookieBrowser?: string;
     llmTextBaseUrl?: string;
     llmTextApiKey?: string;
     llmTextModel?: string;
@@ -151,30 +171,74 @@ export function getElectronAPI(): ElectronAPI | null {
   return detectElectron() ? window.electronAPI! : null;
 }
 
+/** 本地旁白的输入：可以只给链接（先试字幕），也可以给已下载的文件（走 ASR） */
+export interface LocalNarrationSource {
+  /** 已下载到本机的视频/音频文件路径 */
+  path?: string;
+  /** 原始页面链接：给了就先尝试直接抓字幕 */
+  url?: string;
+  /** yt-dlp 解析出的原始链接，优先于 url */
+  sourceUrl?: string;
+  cookieFile?: string;
+  cookieBrowser?: string;
+}
+
+export interface LocalNarrationResult {
+  transcript: string;
+  provider?: string;
+  model?: string;
+  source?: 'subtitle' | 'asr';
+  lang?: string;
+  /** 字幕没拿到且本地没有文件 → 调用方需先下载音轨再重试 */
+  needFile?: boolean;
+  error?: string;
+}
+
 /**
  * 桌面端本地旁白转写。
  *
- * 与云端内核 (/api/narration) 的差别：桌面端全程在本机跑（ffmpeg 抽音轨 +
- * 本机出口 IP 发 ASR 请求），因此不受 Pages 墙钟限制，也不受机房 IP 风控影响。
- * 非桌面端环境返回 null，由调用方回退到云端。
+ * 两条路径（主进程里自动选，调用方不用管）：
+ *  1. **字幕优先** —— 有链接就先用 yt-dlp 抓官方/自动字幕，实测 4 秒出结果，
+ *     不花钱，也不会有 ASR 的同音字错。
+ *  2. **抽音轨 + ASR** —— 没字幕才走，慢一到两个数量级。
+ *
+ * 与云端内核 (/api/narration) 的差别：桌面端全程在本机跑，因此不受 Pages 墙钟
+ * 限制，也不受机房 IP 风控影响。非桌面端环境返回 null，由调用方回退到云端。
  */
 export async function localNarration(
-  videoPath: string,
+  target: string | LocalNarrationSource,
   llm: { llmTextBaseUrl?: string; llmTextApiKey?: string; llmTextModel?: string; llmLanguage?: string },
   id = `nr_${Date.now()}`,
-): Promise<{ transcript: string; provider?: string; model?: string } | null> {
+): Promise<LocalNarrationResult | null> {
   const api = getElectronAPI();
   if (!api?.narration) return null;
+  const src: LocalNarrationSource = typeof target === 'string' ? { path: target } : target;
+
   const res = await api.narration({
     id,
-    path: videoPath,
+    path: src.path || '',
+    url: src.url,
+    sourceUrl: src.sourceUrl,
+    cookieFile: src.cookieFile,
+    cookieBrowser: src.cookieBrowser,
     llmTextBaseUrl: llm.llmTextBaseUrl,
     llmTextApiKey: llm.llmTextApiKey,
     llmTextModel: llm.llmTextModel,
     language: llm.llmLanguage,
   });
-  if (!res.ok) throw new EngineError('electron', res.error || '本地旁白转写失败');
-  return { transcript: res.transcript, provider: res.provider, model: res.model };
+
+  if (!res.ok) {
+    // 「需要文件」不是失败：字幕这条路走不通，调用方下载音轨后再调一次即可
+    if (res.needFile) return { transcript: '', needFile: true, error: res.error };
+    throw new EngineError('electron', res.error || '本地旁白转写失败');
+  }
+  return {
+    transcript: res.transcript,
+    provider: res.provider,
+    model: res.model,
+    source: res.source,
+    lang: res.lang,
+  };
 }
 
 export function createElectronEngine(caps: EngineCapabilities): Engine {

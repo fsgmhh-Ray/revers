@@ -15,13 +15,20 @@ const CLAUSE_SEP = /[，,、]/;
 /** 一行读起来舒服的字数上限 */
 const MAX_CHARS_PER_SENTENCE = 32;
 
+/** 行首时间戳，形如 [00:12] 或 [01:02:03]（字幕路径的产物） */
+const TIMESTAMP_LINE = /^\[\d{1,2}:\d{2}(?::\d{2})?\]\s*/;
+
 /**
  * 把 ASR 原始文本整理成「有断句、有分段」的逐字稿。
  *
  * @param raw                          ASR 原始文本
  * @param opts.sentencesPerParagraph   每段多少句（默认 3）
+ * @param opts.keepTimestamps          输入自带 [MM:SS] 时间戳时保留时间轴（字幕路径用）
  */
-export function formatNarration(raw: string, opts?: { sentencesPerParagraph?: number }): string {
+export function formatNarration(
+  raw: string,
+  opts?: { sentencesPerParagraph?: number; keepTimestamps?: boolean },
+): string {
   const sentencesPerParagraph = Math.max(1, opts?.sentencesPerParagraph ?? 2);
 
   const text = String(raw || '')
@@ -29,6 +36,9 @@ export function formatNarration(raw: string, opts?: { sentencesPerParagraph?: nu
     .replace(/[ \t\u00a0]+/g, ' ')
     .trim();
   if (!text) return '';
+
+  // 带时间轴的逐字稿不能再走「切句重组」——那会把时间戳和台词搅在一起
+  if (opts?.keepTimestamps && TIMESTAMP_LINE.test(text)) return formatTimestamped(text);
 
   const sentences = splitSentences(text);
   if (!sentences.length) return text;
@@ -47,6 +57,26 @@ export function formatNarration(raw: string, opts?: { sentencesPerParagraph?: nu
       .join('');
     paragraphs.push(line);
   }
+  return paragraphs.join('\n\n');
+}
+
+/**
+ * 整理带 [MM:SS] 的逐字稿：一条字幕一行，每 5 条之间空一行。
+ *
+ * 为什么单独一套逻辑：字幕的价值就在于「哪句话在几分几秒」，
+ * 把它并成段落就等于把时间戳扔了。换行续行（同一条字幕折行）要并回上一条。
+ */
+function formatTimestamped(text: string): string {
+  const cues: string[] = [];
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    if (TIMESTAMP_LINE.test(t)) cues.push(t);
+    else if (cues.length) cues[cues.length - 1] = `${cues[cues.length - 1]} ${t}`;
+    else cues.push(t);
+  }
+  const paragraphs: string[] = [];
+  for (let i = 0; i < cues.length; i += 5) paragraphs.push(cues.slice(i, i + 5).join('\n'));
   return paragraphs.join('\n\n');
 }
 

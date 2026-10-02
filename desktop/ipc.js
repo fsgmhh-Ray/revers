@@ -462,7 +462,7 @@ function parseProgress(line) {
 }
 
 /** 起一条下载进程并把进度回传给渲染层 */
-function spawnDownload({ id, args, dir, base, win }) {
+function spawnDownload({ id, args, dir, base, win, ext = 'mp4' }) {
   const proc = spawn(resolveBinary('yt-dlp'), args, { env: childEnv(), windowsHide: true });
   downloads.set(id, { proc, percent: 0 });
 
@@ -506,7 +506,7 @@ function spawnDownload({ id, args, dir, base, win }) {
       downloads.delete(id);
       if (code === 0) {
         emit(100, true);
-        const finalPath = lastFile && fs.existsSync(lastFile) ? lastFile : path.join(dir, `${base}.mp4`);
+        const finalPath = lastFile && fs.existsSync(lastFile) ? lastFile : path.join(dir, `${base}.${ext}`);
         // 把目录一并回传，前端可以直接显示「文件在哪」并一键打开
         resolve({ ok: true, path: finalPath, dir });
       } else {
@@ -518,27 +518,42 @@ function spawnDownload({ id, args, dir, base, win }) {
 }
 
 async function startDownload(payload, win) {
-  const { id, url, sourceUrl, filename, cookieBrowser, cookieFile, dir: preferredDir } = payload;
+  const {
+    id,
+    url,
+    sourceUrl,
+    filename,
+    cookieBrowser,
+    cookieFile,
+    audioOnly = false,
+    dir: preferredDir,
+  } = payload;
   if (!url) throw new Error('缺少下载链接');
 
   // 原始页面链接优先：让 yt-dlp 自己选最佳格式并用 FFmpeg 合并音视频
   const target = isPlatformUrl(sourceUrl) ? sourceUrl : url;
   // 用户设置的目录优先；不可写时自动退回，绝不因为目录问题让下载失败
   const dir = resolveDownloadDir(preferredDir);
-  const base = (filename || 'video').replace(/\.mp4$/i, '');
+  // 只要音轨时扩展名可能是 m4a，文件名后缀要跟着变，否则回退路径会对不上真实产物
+  const base = (filename || 'video').replace(/\.(mp4|m4a|webm|mp3)$/i, '');
   const output = path.join(dir, `${base}.%(ext)s`);
 
-  const baseArgs = [
-    '--no-warnings',
-    '--no-playlist',
-    '--newline',
-    '-f',
-    'bestvideo+bestaudio/best',
-    '--merge-output-format',
-    'mp4',
-    '-o',
-    output,
-  ];
+  // 只做旁白时没必要拖一整条视频：30MB 的视频里真正用到的音轨只有 5MB 左右，
+  // 下载这步是全链路最慢的一环（实测 1~2 分钟），砍掉它是最直接的提速。
+  const baseArgs = audioOnly
+    ? ['--no-warnings', '--no-playlist', '--newline', '-f', 'bestaudio/best', '-x', '--audio-format', 'm4a', '-o', output]
+    : [
+        '--no-warnings',
+        '--no-playlist',
+        '--newline',
+        '-f',
+        'bestvideo+bestaudio/best',
+        '--merge-output-format',
+        'mp4',
+        '-o',
+        output,
+      ];
+  const ext = audioOnly ? 'm4a' : 'mp4';
 
   const loginTarget = isPlatformUrl(target);
   const cookieFilePath = loginTarget ? resolveCookieFile(cookieFile) : null;
@@ -551,6 +566,7 @@ async function startDownload(payload, win) {
         dir,
         base,
         win,
+        ext,
         args: [...baseArgs, '--cookies', cookieFilePath, target],
       });
     } catch (err) {
@@ -568,6 +584,7 @@ async function startDownload(payload, win) {
         dir,
         base,
         win,
+        ext,
         args: [...baseArgs, '--cookies-from-browser', picked, target],
       });
     } catch (err) {
@@ -577,7 +594,7 @@ async function startDownload(payload, win) {
     }
   }
 
-  return spawnDownload({ id, dir, base, win, args: [...baseArgs, target] });
+  return spawnDownload({ id, dir, base, win, ext, args: [...baseArgs, target] });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1461,32 +1478,271 @@ async function transcribeOnce({ url, apiKey, model, language, audio }) {
   return text;
 }
 
+/* ------------------------------------------------------------------ */
+/* 字幕抓取（旁白首选路径：比 ASR 快 30 倍，且不用花钱、不会有同音字错） */
+/* ------------------------------------------------------------------ */
+
 /**
- * 完整旁白 / 转写：抽音轨 → OpenAI 兼容 ASR。
+ * 抓字幕时请求的语言，按偏好顺序排列。
+ * 中文优先是因为本项目主要处理中文视频；`en.*` 带通配以接住 en-US / en-orig 等变体。
+ */
+const SUBTITLE_LANGS = 'zh-Hans,zh-Hant,zh,en.*';
+/** 字幕抓取超时：实测正常 4 秒左右，留足余量但不让整条链路卡死 */
+const SUBTITLE_TIMEOUT_MS = 60_000;
+
+/**
+ * 跑 yt-dlp 但**不看退出码**。
+ *
+ * 为什么必须这样：YouTube 的字幕接口会**按语言限流**（实测同一视频 `en` 拿到、
+ * `zh-Hans` 429）。yt-dlp 只要有一个语言失败就整体返回非 0，
+ * 但**已成功的那些 .vtt 已经落在磁盘上了**。用 runYtDlp 会把这部分成果一起丢掉。
+ * 所以这里只收集 stderr 供排查，产物靠读目录判断。
+ */
+function runYtDlpLoose(args, { timeout = 60_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(resolveBinary('yt-dlp'), args, { env: childEnv(), windowsHide: true });
+    let stderr = '';
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL');
+      reject(new Error('yt-dlp 字幕抓取超时'));
+    }, timeout);
+
+    proc.stdout.on('data', () => {});
+    proc.stderr.on('data', (c) => {
+      stderr += c.toString();
+    });
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    proc.on('close', () => {
+      clearTimeout(timer);
+      resolve(stderr);
+    });
+  });
+}
+
+/**
+ * 字幕文件排序权重：中文人工 > 中文其它变体 > 英文。
+ * 同一视频常常同时存在多种字幕，取错语言等于白干。
+ */
+function subtitleRank(name) {
+  const f = String(name).toLowerCase();
+  if (f.includes('zh-hans') || f.includes('zh-cn')) return 0;
+  if (f.includes('zh-hant') || f.includes('zh-tw')) return 1;
+  if (/\.zh\./.test(f) || f.includes('-zh.')) return 2;
+  if (/^subs\.en/.test(f) || f.includes('.en.')) return 3;
+  return 4;
+}
+
+/**
+ * 尝试抓取字幕。返回 { text, lang }，拿不到返回 null（**从不抛错**）。
+ *
+ * 口径是「有多少算多少」：只要目录里落了任意一个字幕文件就算成功，
+ * 其余语言 429 / 不存在都忽略 —— 调用方还有 ASR 兜底，这里不该拖后腿。
+ */
+async function fetchSubtitles({ url, dir, cookieFile, cookieBrowser }) {
+  if (!url || !isPlatformUrl(url)) return null;
+
+  const args = [
+    '--no-warnings',
+    '--no-playlist',
+    '--skip-download',
+    '--write-subs',
+    '--write-auto-subs',
+    '--sub-langs',
+    SUBTITLE_LANGS,
+    '--sub-format',
+    'vtt/srt/best',
+    '-o',
+    path.join(dir, 'subs.%(ext)s'),
+  ];
+
+  const attempt = async (extra) => runYtDlpLoose([...args, ...extra, url], { timeout: SUBTITLE_TIMEOUT_MS });
+  const gotAny = () => {
+    try {
+      return fs.readdirSync(dir).some((f) => /^subs\..+\.(vtt|srt|ass|json3|srv3)$/i.test(f));
+    } catch {
+      return false;
+    }
+  };
+
+  // 顺序刻意「匿名优先」：YouTube 的字幕接口会按语言限流（实测 429），
+  // 每多跑一次 yt-dlp 就多一次抓取请求。绝大多数视频匿名就能拿到字幕，
+  // 只有拿不到时才值得为登录态再付一次请求成本。
+  try {
+    await attempt([]);
+  } catch {
+    /* 匿名失败（超时/二进制缺失），下面还有带登录态的补救 */
+  }
+
+  if (!gotAny() && isPlatformUrl(url)) {
+    try {
+      const cookiePath = resolveCookieFile(cookieFile);
+      if (cookiePath) {
+        await attempt(['--cookies', cookiePath]);
+      } else {
+        const picked = pickBrowser(cookieBrowser);
+        if (picked) {
+          try {
+            await attempt(['--cookies-from-browser', picked]);
+          } catch (err) {
+            if (isCookieError(String((err && err.message) || ''))) cookieFailed.add(picked);
+          }
+        }
+      }
+    } catch {
+      /* 带登录态也拿不到：按「没拿到」处理，交给 ASR 兜底 */
+    }
+  }
+
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((f) => /^subs\..+\.(vtt|srt|ass|json3|srv3)$/i.test(f));
+  } catch {
+    return null;
+  }
+  if (!files.length) return null;
+
+  files.sort((a, b) => subtitleRank(a) - subtitleRank(b));
+  for (const f of files) {
+    try {
+      const text = parseSubtitle(fs.readFileSync(path.join(dir, f), 'utf8'));
+      if (text) return { text, lang: f.replace(/^subs\./, '').replace(/\.[^.]+$/, '') };
+    } catch {
+      /* 该文件解析不了就换下一个 */
+    }
+  }
+  return null;
+}
+
+/**
+ * 把 VTT / SRT 解析成 `[MM:SS] 文本` 行。
+ *
+ * 两处必须做的清洗（YouTube 自动字幕尤其明显）：
+ *  - 自动字幕是**滚动窗口**，相邻 cue 的文本大量重复，不去重会得到满屏复读；
+ *  - 文件里混有 `Kind:`/`Language:`/`align:` 等元信息与数字 cue 序号，不是台词。
+ */
+function parseSubtitle(raw) {
+  const tsRe = /(\d+):(\d{2}):(\d{2})[.,](\d{3})\s*-->/;
+  const lines = String(raw || '').split(/\r?\n/);
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const m = tsRe.exec(lines[i].trim());
+    if (!m) {
+      i += 1;
+      continue;
+    }
+    const start = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+    i += 1;
+    const parts = [];
+    while (i < lines.length && lines[i].trim()) {
+      const t = lines[i]
+        .replace(/<[^>]+>/g, '') // 剥 <c>、<00:00:01.360> 这类内联标签
+        .trim();
+      // 跳过样式行 / 纯数字 cue 序号
+      if (t && !/^(align|position|size|vertical|line|region|note|style):/i.test(t) && !/^\d+$/.test(t)) {
+        parts.push(t);
+      }
+      i += 1;
+    }
+    const text = parts.join(' ').replace(/\s+/g, ' ').trim();
+    if (text && (out.length === 0 || out[out.length - 1].text !== text)) {
+      out.push({ start, text });
+    }
+  }
+
+  return out.map((c) => `${tsFmt(c.start)} ${c.text}`).join('\n');
+}
+
+/** 秒 → [MM:SS] / [HH:MM:SS] */
+function tsFmt(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  return h
+    ? `[${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}]`
+    : `[${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}]`;
+}
+
+/**
+ * 完整旁白 / 转写。
+ *
+ * 顺序是**字幕优先 → 本地音轨 + ASR 兜底**：
+ *  - 字幕路径实测 4 秒左右出结果，不花钱，且是官方/官方 ASR 生成的，没有同音字错；
+ *  - 没有字幕（或字幕接口被限流）才下载音轨走 ASR，这条路径慢一到两个数量级。
  * 超过体积上限时自动按静音切块逐块转写再拼接（长视频兜底）。
  */
 async function buildNarration(payload, win) {
   const {
     id = `nr_${Date.now()}`,
     path: file,
+    sourceUrl,
+    url: pageUrl,
+    cookieFile,
+    cookieBrowser,
     llmTextBaseUrl,
     llmTextApiKey,
     llmTextModel,
     language,
   } = payload || {};
 
-  if (!file || !fs.existsSync(file)) {
-    throw new Error('找不到本地视频文件，请先下载到本机再转写');
-  }
-  if (!llmTextBaseUrl || !String(llmTextBaseUrl).trim()) {
-    throw new Error('请在设置里填写「文本 LLM（旁白转写）」的 Base URL（如 https://api.groq.com/openai/v1）');
-  }
-
   const send = (percent, stage) => {
     if (win && !win.isDestroyed()) {
       win.webContents.send('cineflow:storyboard-progress', { id, percent, stage });
     }
   };
+
+  const hasFile = Boolean(file) && fs.existsSync(file);
+
+  // ---- 第一阶段：字幕（有链接就先试，不需要本地文件） ----
+  const storyUrl = (sourceUrl && isPlatformUrl(sourceUrl) && sourceUrl) || (isPlatformUrl(pageUrl) && pageUrl) || '';
+  if (storyUrl) {
+    // 明确告诉用户这步大概多久、失败会怎样，否则界面停在这一行会被当成卡死
+    send(3, '尝试直接取字幕（秒级，拿不到会自动转 ASR）');
+    const dir = path.join(STORYBOARD_TMP, `${String(id).replace(/[^\w.-]/g, '_')}_subs`);
+    fs.mkdirSync(dir, { recursive: true });
+    try {
+      const sub = await fetchSubtitles({ url: storyUrl, dir, cookieFile, cookieBrowser });
+      if (sub) {
+        send(100, '完成（来自字幕）');
+        return {
+          ok: true,
+          id,
+          transcript: sub.text,
+          source: 'subtitle',
+          lang: sub.lang,
+          provider: 'subtitle',
+          model: '',
+        };
+      }
+    } finally {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* 清理失败不影响结果 */
+      }
+    }
+  }
+
+  // ---- 字幕没拿到，又没有本地文件：让前端先下载（只要音轨即可） ----
+  if (!hasFile) {
+    if (!llmTextBaseUrl || !String(llmTextBaseUrl).trim()) {
+      throw new Error('请在设置里填写「文本 LLM（旁白转写）」的 Base URL（如 https://api.groq.com/openai/v1）');
+    }
+    return {
+      ok: false,
+      needFile: true,
+      error: '该视频没有可用字幕，需要下载音轨后转写',
+    };
+  }
+
+  if (!llmTextBaseUrl || !String(llmTextBaseUrl).trim()) {
+    throw new Error('请在设置里填写「文本 LLM（旁白转写）」的 Base URL（如 https://api.groq.com/openai/v1）');
+  }
 
   send(5, '检测音轨');
   if (!(await hasAudioStream(file))) {
@@ -1536,7 +1792,7 @@ async function buildNarration(payload, win) {
     }
 
     send(100, '完成');
-    return { ok: true, id, transcript, provider: url, model: opts.model };
+    return { ok: true, id, transcript, source: 'asr', provider: url, model: opts.model };
   } finally {
     try {
       fs.rmSync(dir, { recursive: true, force: true });

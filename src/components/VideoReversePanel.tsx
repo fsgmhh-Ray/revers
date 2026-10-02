@@ -33,6 +33,8 @@ export function VideoReversePanel() {
   const [narration, setNarration] = useState('');
   const [narrError, setNarrError] = useState('');
   const [copied, setCopied] = useState(false);
+  /** 旁白来源（「字幕（zh-Hans）」/「音频转写」），让用户知道拿到的是哪一种 */
+  const [narrSource, setNarrSource] = useState('');
 
   /** 桌面端本地全流程：已下载到本机的视频路径 */
   const [localPath, setLocalPath] = useState('');
@@ -193,10 +195,16 @@ export function VideoReversePanel() {
         setNarrPhase('analyzing');
         setLocalStage('本地转写旁白');
         try {
-          const local = await localNarration(dl.path, llm, `nr_${Date.now()}`);
+          // 即便已经下载了整段视频，也先试字幕：质量更好且不用付 ASR 的钱
+          const local = await localNarration({ path: dl.path, url: url.trim(), ...dlCommon }, llm, `nr_${Date.now()}`);
           if (local?.transcript) {
             // 与「提取完整旁白」按钮保持同一套整理逻辑，否则一键流程出来的是挤成一坨的原文
-            setNarration(formatNarration(local.transcript));
+            setNarration(
+              local.source === 'subtitle'
+                ? formatNarration(local.transcript, { keepTimestamps: true })
+                : formatNarration(local.transcript),
+            );
+            setNarrSource(local.source === 'subtitle' ? `字幕（${local.lang || '自动'}）` : '音频转写');
             setNarrPhase('success');
           } else {
             setNarrError('旁白转写返回为空（该视频可能无人声）');
@@ -297,9 +305,25 @@ export function VideoReversePanel() {
     try {
       // 桌面端：无论是否已下载过，都走本机 IP（避免云端内核的机房 IP 风控 / Pages 墙钟）
       if (desktopReady && api) {
+        // ① 先试字幕：只要视频有官方/自动字幕，几秒就能拿到，且不用花钱、不会有同音字错。
+        //    拿不到才回退到「下载音轨 + ASR」这条慢路（慢一到两个数量级）。
+        setLocalStage('尝试直接取字幕');
+        const subtitleHit = await localNarration(
+          { url: url.trim(), ...dlCommon },
+          llm,
+          `nr_${Date.now()}`,
+        );
+        if (subtitleHit?.transcript) {
+          setNarration(formatNarration(subtitleHit.transcript, { keepTimestamps: true }));
+          setNarrSource(subtitleHit.source === 'subtitle' ? `字幕（${subtitleHit.lang || '自动'}）` : '音频转写');
+          setNarrPhase('success');
+          return;
+        }
+
+        // ② 没字幕：下载音轨（30MB 视频里真正用到的只有 5MB）后转写
         let target = localPath;
         if (!target) {
-          setLocalStage('解析并下载到本机');
+          setLocalStage('无字幕，下载音轨到本机');
           const p = detectPlatform(url.trim());
           const parsed = await api.parse({ url: url.trim(), platform: p, ...dlCommon });
           if (!parsed.ok) throw new Error(parsed.error || '解析失败');
@@ -307,8 +331,9 @@ export function VideoReversePanel() {
             id: `rev_narr_${Date.now()}`,
             url: url.trim(),
             platform: p,
-            filename: `${safeName(parsed.data.title || 'video')}.mp4`,
+            filename: `${safeName(parsed.data.title || 'video')}.m4a`,
             sourceUrl: parsed.data.originalUrl,
+            audioOnly: true,
             ...dlCommon,
           });
           if (!dl.ok || !dl.path) throw new Error(dl.error || '下载失败，未拿到本地文件');
@@ -317,13 +342,14 @@ export function VideoReversePanel() {
           setLocalDir(dl.dir || '');
         }
         setLocalStage('本地转写旁白');
-        const local = await localNarration(target, llm, `nr_${Date.now()}`);
+        const local = await localNarration(target!, llm, `nr_${Date.now()}`);
         if (local?.transcript) {
           setNarration(formatNarration(local.transcript));
+          setNarrSource(local.source === 'subtitle' ? `字幕（${local.lang || '自动'}）` : '音频转写');
           setNarrPhase('success');
           return;
         }
-        setNarrError('本地转写返回为空（该视频可能无人声）');
+        setNarrError(local?.needFile ? '该视频没有字幕，且未拿到本地音轨' : '本地转写返回为空（该视频可能无人声）');
         setNarrPhase('error');
         return;
       }
@@ -650,7 +676,17 @@ export function VideoReversePanel() {
           {narrPhase === 'success' && narration && (
             <div className="space-y-2 rounded-xl border border-white/5 bg-white/[.02] p-3">
               <div className="flex items-center justify-between">
-                <p className="text-[11.5px] font-medium text-slate-300">完整旁白 / 转写（已断句分段，可直接编辑）</p>
+                <p className="text-[11.5px] font-medium text-slate-300">
+                  完整旁白 / 转写
+                  {narrSource && (
+                    <span className="ml-1.5 rounded bg-brand/15 px-1.5 py-0.5 text-[10px] font-normal text-brand-soft">
+                      {narrSource}
+                    </span>
+                  )}
+                  <span className="ml-1.5 text-[10.5px] font-normal text-slate-500">
+                    {narrSource.startsWith('字幕') ? '（带时间轴，可直接编辑）' : '（已断句分段，可直接编辑）'}
+                  </span>
+                </p>
                 <span className="text-[10.5px] text-slate-500">{narration.length} 字</span>
               </div>
               <textarea
