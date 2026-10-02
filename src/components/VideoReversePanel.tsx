@@ -472,7 +472,7 @@ export function VideoReversePanel() {
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
-                      placeholder="Model（meta/llama-3.2-90b-vision-instruct）"
+                      placeholder="Model（建议 meta/llama-3.2-11b-vision-instruct）"
                       value={settings.llmModel}
                       onChange={(e) => update('llmModel', e.target.value)}
                     />
@@ -484,6 +484,11 @@ export function VideoReversePanel() {
                       onChange={(e) => update('llmApiKey', e.target.value)}
                     />
                   </div>
+                  <p className="text-[10px] leading-relaxed text-slate-500">
+                    同一把 NVIDIA key 实测：<span className="text-slate-300">11b 单帧约 1 秒</span>，
+                    <span className="text-slate-300">90b 单帧约 85 秒</span>（跑 9 个镜头差 10 分钟以上）。
+                    分镜优先用 11b；要更高质量再换 90b，但请耐心等进度条。
+                  </p>
                   {probeMsg.vision && (
                     <p className={`text-[10.5px] leading-relaxed ${probeState.vision === 'ok' ? 'text-emerald-300/90' : probeState.vision === 'fail' ? 'text-rose-300/90' : 'text-slate-400'}`}>
                       {probeMsg.vision}

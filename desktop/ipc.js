@@ -635,7 +635,10 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 120_000) {
     return await fetch(url, { ...options, signal: ac.signal });
   } catch (err) {
     if (ac.signal.aborted || /abort/i.test(String((err && err.name) || err))) {
-      throw new Error(`请求超时（${Math.round(timeoutMs / 1000)}s）——供应商可能正在冷启动，或网络被拦`);
+      throw new Error(
+        `请求超时（${Math.round(timeoutMs / 1000)}s）——供应商可能正在冷启动、排队，或网络被拦；` +
+          `若用的是大模型，换更小的型号（如 meta/llama-3.2-11b-vision-instruct）通常能快几十倍`,
+      );
     }
     throw err;
   } finally {
@@ -1041,15 +1044,20 @@ function sweepStoryboardTmp(currentDir, maxAgeMs = 6 * 3600 * 1000) {
 }
 
 /**
- * 送进视觉 LLM 的关键帧上限。
+ * 送进视觉 LLM 的关键帧上限，以及整段 LLM 补全的总时间预算。
  *
- * 为什么要封顶：大模型（尤其 NVIDIA 上 90B 级别的视觉模型）单次冷启动实测要
- * **76 秒**，串行跑 20 多帧就是一小时的等待，用户只会以为卡死。
- * 封顶 + 并发后，最坏情况也被限制在几分钟内，且多抽的帧照样有缩略图。
+ * 为什么两层都要设：实测 NVIDIA 上同一把 key 的视觉模型时延差两个数量级——
+ *   meta/llama-3.2-11b-vision-instruct  → 1.0 秒
+ *   meta/llama-3.2-90b-vision-instruct → 85 秒（冷启动）
+ * 用户若填了大模型，单帧就可能等一分多钟，20 多帧串行就是半小时，
+ * 界面看上去和卡死没区别。所以既要限制帧数，也要给总时长封顶：
+ * 超预算就把已完成的帧交付，并把「为什么没补全完」如实写进 stats.note。
  */
 const LLM_MAX_FRAMES = 12;
-/** 视觉 LLM 单次调用超时：冷启动可到 80s 量级，留足余量但不允许无限等 */
-const VISION_CALL_TIMEOUT_MS = 150_000;
+/** 单次调用超时：90B 冷启动实测 85s，留一倍余量 */
+const VISION_CALL_TIMEOUT_MS = 180_000;
+/** 整段 LLM 补全的总预算（毫秒）；超了就交付已完成的部分 */
+const LLM_TOTAL_BUDGET_MS = 8 * 60 * 1000;
 
 /**
  * 用视觉 LLM 补全分镜的画面描述与提示词（本地执行，请求从本机 IP 发出）。
@@ -1074,11 +1082,17 @@ async function enrichStoryboardWithLLM({ nodes, llm, language, send, maxShots })
   let enriched = 0;
   let done = 0;
   let firstError = '';
+  let budgetExceeded = 0;
   const started = Date.now();
 
   // 并发 2：NVIDIA 免费端点对并发敏感，2 路既压住等待又不容易触发 429。
   const worker = async () => {
     for (;;) {
+      // 总预算兜底：供应商时延不可控，但不能让用户无限等
+      if (Date.now() - started > LLM_TOTAL_BUDGET_MS) {
+        budgetExceeded = targets.length;
+        return;
+      }
       const node = targets.shift();
       if (!node) return;
       try {
@@ -1117,6 +1131,11 @@ async function enrichStoryboardWithLLM({ nodes, llm, language, send, maxShots })
   };
 
   await Promise.all([worker(), worker()]);
+  if (budgetExceeded > 0) {
+    firstError =
+      firstError ||
+      `视觉 LLM 总耗时超过 ${Math.round(LLM_TOTAL_BUDGET_MS / 60000)} 分钟预算，已跳过剩余 ${budgetExceeded} 帧（当前模型太慢，建议换 meta/llama-3.2-11b-vision-instruct 这类小模型）`;
+  }
   return { enriched, skipped: false, error: firstError };
 }
 
@@ -1200,8 +1219,11 @@ async function testLlmConfig({ kind, baseUrl, apiKey, model }) {
     );
     const ms = Date.now() - started;
     if (res.ok) {
-      // 90B 级别的视觉模型冷启动实测要 76 秒，慢不等于坏——把预期讲清楚
-      const slow = ms > 20_000 ? `，首次调用约 20–80s 属冷启动正常现象` : '';
+      // 90B 级视觉模型单次实测 85s，11B 只要 1s——慢不等于坏，但要说清代价
+      const slow =
+        kind === 'vision' && ms > 20_000
+          ? `。该模型单次调用很慢（实测 90B 约 85s / 11B 约 1s），跑分镜会等很久，建议换 meta/llama-3.2-11b-vision-instruct 这类小模型`
+          : '';
       return { ok: true, message: `可用（${ms}ms${slow}）${note}` };
     }
     const t = await res.text().catch(() => '');
