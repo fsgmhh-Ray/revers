@@ -51,7 +51,7 @@ export function Header({
               <h1 className="text-[15px] font-semibold tracking-wide text-white">REVERSE</h1>
               <span className="text-[11px] font-medium text-slate-500">reverse.cineflowing.com</span>
             </div>
-            <p className="text-[11.5px] text-slate-400">爆款短剧反向工程工坊 · 无水印解析 / 批量下载 / 分镜逆向</p>
+            <p className="text-[11.5px] text-slate-400">爆款短剧反向工程工坊 · 无水印解析 / 批量下载 / 分镜逆向 / 提示词反推</p>
           </div>
         </div>
 

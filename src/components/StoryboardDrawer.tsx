@@ -285,9 +285,8 @@ export function StoryboardDrawer({
               )}
             </div>
 
-              {/* 云端反推（BYOK，无需桌面端） */}
-              {!desktopReady && (
-                <div className="mt-3 space-y-2 rounded-xl border border-brand/20 bg-brand/[.05] p-3">
+              {/* 云端反推（BYOK，桌面端与网页端均可） */}
+              <div className="mt-3 space-y-2 rounded-xl border border-brand/20 bg-brand/[.05] p-3">
                   <div>
                     <p className="text-[11.5px] font-medium text-brand-soft">云端反推 · 多模态 LLM（BYOK）</p>
                     <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-500">
@@ -328,7 +327,6 @@ export function StoryboardDrawer({
                     {status === 'analyzing' ? '云端反推中…' : '开始云端反推'}
                   </button>
                 </div>
-              )}
 
               {/* 完整旁白 / 转写 */}
               <div className="mt-3 space-y-2 rounded-xl border border-white/5 bg-white/[.02] p-3">

@@ -1,0 +1,314 @@
+import { useState } from 'react';
+import { useSettings } from '../hooks/useSettings';
+import { cloudNarration, cloudStoryboard, type LlmCfg } from '../services/cloudBridge';
+import { downloadText, safeName, seconds, timecode, toCsv, toMarkdown } from '../utils/storyboard';
+import { IconSparkles } from './Icons';
+
+type Phase = 'idle' | 'analyzing' | 'success' | 'error';
+
+/**
+ * 视频反推提示词 —— 主页独立入口。
+ *
+ * 与 StoryboardDrawer 的区别：这里**不依赖桌面端、也不需要先解析/下载**，
+ * 贴任意视频链接即可由云端内核（Oracle parser-core）完成
+ * 下载 → FFmpeg 抽帧 → 多模态 LLM 反推分镜提示词 / 音轨转写。
+ *
+ * LLM 走 BYOK（OpenAI 兼容），配置与设置面板共用同一份 localStorage。
+ */
+export function VideoReversePanel() {
+  const { settings, update } = useSettings();
+  const [open, setOpen] = useState(true);
+  const [showCfg, setShowCfg] = useState(false);
+  const [url, setUrl] = useState('');
+
+  const [phase, setPhase] = useState<Phase>('idle');
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<any>(null);
+
+  const [narrPhase, setNarrPhase] = useState<Phase>('idle');
+  const [narration, setNarration] = useState('');
+  const [narrError, setNarrError] = useState('');
+
+  const llm: LlmCfg = {
+    llmBaseUrl: settings.llmBaseUrl,
+    llmApiKey: settings.llmApiKey,
+    llmModel: settings.llmModel,
+    llmLanguage: settings.llmLanguage,
+  };
+  const llmReady = Boolean(settings.llmBaseUrl && settings.llmModel);
+  const busy = phase === 'analyzing' || narrPhase === 'analyzing';
+
+  const reverse = async () => {
+    if (!url.trim()) {
+      setError('请先粘贴视频链接');
+      setPhase('error');
+      return;
+    }
+    if (!llmReady) {
+      setError('请先展开「LLM 配置」填写 Base URL 与 Model（可接 NVIDIA NIM / Groq / DeepSeek / Grok / OpenAI）');
+      setPhase('error');
+      setShowCfg(true);
+      return;
+    }
+    setPhase('analyzing');
+    setError('');
+    try {
+      const data = await cloudStoryboard(url.trim(), llm, { maxShots: 24, frameWidth: 480 });
+      if (data?.status === 'error') {
+        setPhase('error');
+        setError(data.text || '内核返回错误');
+        return;
+      }
+      setResult(data);
+      setPhase('success');
+    } catch (err) {
+      setPhase('error');
+      setError(err instanceof Error ? err.message : '反推失败');
+    }
+  };
+
+  const narrate = async () => {
+    if (!url.trim()) {
+      setNarrError('请先粘贴视频链接');
+      setNarrPhase('error');
+      return;
+    }
+    if (!llmReady) {
+      setNarrError('请先填写 LLM Base URL 与 Model（转写需 Groq whisper-large-v3 / OpenAI / NVIDIA NIM 等支持音频的端点）');
+      setNarrPhase('error');
+      setShowCfg(true);
+      return;
+    }
+    setNarrPhase('analyzing');
+    setNarrError('');
+    try {
+      const data = await cloudNarration(url.trim(), llm);
+      if (data?.status === 'error') {
+        setNarrPhase('error');
+        setNarrError(data.text || '转写失败');
+        return;
+      }
+      setNarration(data?.transcript || '');
+      setNarrPhase('success');
+    } catch (err) {
+      setNarrPhase('error');
+      setNarrError(err instanceof Error ? err.message : '转写失败');
+    }
+  };
+
+  const nodes = result?.nodes ?? [];
+  const baseName = safeName('reverse');
+  const exportMd = () => downloadText(`${baseName}_分镜.md`, toMarkdown(nodes, { stats: result?.stats }), 'text/markdown;charset=utf-8');
+  const exportCsv = () => downloadText(`${baseName}_分镜.csv`, toCsv(nodes), 'text/csv;charset=utf-8');
+  const exportJson = () =>
+    downloadText(`${baseName}_分镜.json`, JSON.stringify(result, null, 2), 'application/json');
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-brand/25 bg-gradient-to-br from-brand/[.07] to-transparent">
+      <button
+        className="flex w-full items-center gap-2.5 px-4 py-3 text-left"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-brand/20 text-brand-soft">
+          <IconSparkles width={15} height={15} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13.5px] font-semibold text-white">视频反推提示词 · 独立入口</span>
+          <span className="block truncate text-[11px] text-slate-400">
+            贴任意视频链接 → 云端内核抽帧 → 多模态 LLM 反推分镜提示词 / 完整旁白（无需安装、无需先解析）
+          </span>
+        </span>
+        <span className="chip brand-tonal shrink-0 text-[10.5px]">{open ? '收起' : '展开'}</span>
+      </button>
+
+      {open && (
+        <div className="space-y-3 border-t border-white/5 px-4 py-3.5">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              className="flex-1 rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-[12.5px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-brand"
+              placeholder="粘贴视频链接（TikTok / YouTube Shorts / Instagram Reels / 抖音 / 小红书…）"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+            />
+            <button className="btn-primary shrink-0 !py-2.5 !text-[12.5px]" onClick={() => void reverse()} disabled={busy}>
+              <IconSparkles width={14} height={14} />
+              {phase === 'analyzing' ? '反推中…' : '反推分镜提示词'}
+            </button>
+            <button className="btn-ghost shrink-0 !py-2.5 !text-[12.5px]" onClick={() => void narrate()} disabled={busy}>
+              {narrPhase === 'analyzing' ? '转写中…' : '提取完整旁白'}
+            </button>
+          </div>
+
+          {/* LLM 配置（BYOK） */}
+          <div className="rounded-xl border border-white/5 bg-white/[.02] p-3">
+            <button
+              className="flex w-full items-center justify-between text-left"
+              onClick={() => setShowCfg((v) => !v)}
+            >
+              <span className="text-[11.5px] font-medium text-slate-300">
+                LLM 配置（BYOK · OpenAI 兼容）
+                {llmReady ? (
+                  <span className="ml-2 text-emerald-300/80">已配置</span>
+                ) : (
+                  <span className="ml-2 text-amber-300/80">未配置</span>
+                )}
+              </span>
+              <span className="text-[11px] text-slate-500">{showCfg ? '收起' : '展开'}</span>
+            </button>
+            {showCfg && (
+              <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+                <input
+                  className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                  placeholder="Base URL（如 https://integrate.api.nvidia.com/v1）"
+                  value={settings.llmBaseUrl}
+                  onChange={(e) => update('llmBaseUrl', e.target.value)}
+                />
+                <input
+                  className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                  placeholder="Model（如 gpt-4o-mini / llama-3.1-8b-instant）"
+                  value={settings.llmModel}
+                  onChange={(e) => update('llmModel', e.target.value)}
+                />
+                <input
+                  className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                  type="password"
+                  placeholder="API Key（视供应商，可留空）"
+                  value={settings.llmApiKey}
+                  onChange={(e) => update('llmApiKey', e.target.value)}
+                />
+                <input
+                  className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                  placeholder="转写语言（可选，如 zh / en）"
+                  value={settings.llmLanguage}
+                  onChange={(e) => update('llmLanguage', e.target.value)}
+                />
+                <p className="text-[10.5px] leading-relaxed text-slate-500 sm:col-span-2">
+                  密钥只存在你本机浏览器（localStorage），随请求直发内核，不落第三方。/v1/chat/completions 走反推，/v1/audio/transcriptions 走转写。
+                </p>
+              </div>
+            )}
+          </div>
+
+          {phase === 'analyzing' && (
+            <p className="text-[11.5px] text-slate-400">云端下载 + 抽帧 + LLM 反推中…首帧较慢，请稍候。</p>
+          )}
+          {phase === 'error' && error && (
+            <p className="rounded-xl border border-rose-500/20 bg-rose-500/[.06] px-3 py-2 text-[11.5px] leading-relaxed text-rose-200">
+              {error}
+            </p>
+          )}
+
+          {/* 分镜结果 */}
+          {phase === 'success' && result && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {[
+                  { k: '镜头数', v: String(result.stats?.sceneCount ?? nodes.length) },
+                  { k: '平均镜头', v: seconds(result.stats?.avgShotDuration ?? 0) },
+                  { k: '总时长', v: seconds(result.source?.duration ?? 0) },
+                  { k: '分辨率', v: result.source?.width ? `${result.source.width}×${result.source.height}` : '—' },
+                ].map((it) => (
+                  <div key={it.k} className="rounded-xl border border-white/5 bg-white/[.02] px-3 py-2">
+                    <p className="text-[10.5px] text-slate-500">{it.k}</p>
+                    <p className="mt-0.5 text-[13px] font-medium text-slate-100">{it.v}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-brand/20 bg-brand/[.06] px-3 py-2">
+                <span className="text-[11.5px] text-slate-200">节奏：{result.stats?.cutRhythm}</span>
+                <span className="text-[10.5px] text-slate-500">· {result.stats?.analyzedBy}</span>
+                <div className="ml-auto flex flex-wrap gap-2">
+                  <button className="btn-ghost !py-1.5 !text-[11.5px]" onClick={exportMd}>导出 Markdown</button>
+                  <button className="btn-ghost !py-1.5 !text-[11.5px]" onClick={exportCsv}>导出 CSV</button>
+                  <button className="btn-ghost !py-1.5 !text-[11.5px]" onClick={exportJson}>导出 JSON</button>
+                </div>
+              </div>
+
+              {result.stats?.note && (
+                <p className="rounded-xl border border-amber-400/20 bg-amber-400/[.05] px-3 py-2 text-[11px] leading-relaxed text-amber-200/80">
+                  {result.stats.note}
+                </p>
+              )}
+
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {nodes.map((n: any) => (
+                  <article key={n.id} className="overflow-hidden rounded-xl border border-white/5 bg-white/[.02]">
+                    <div className="relative aspect-video bg-black">
+                      {n.thumbnailUrl ? (
+                        <img src={n.thumbnailUrl} alt={`镜头 ${n.index}`} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="grid h-full w-full place-items-center text-[11px] text-slate-600">无关键帧</div>
+                      )}
+                      <span className="absolute left-2 top-2 rounded-md bg-black/70 px-1.5 py-0.5 font-mono text-[10px] text-white">
+                        #{n.index} · {timecode(n.startTime)}
+                      </span>
+                      <span className="absolute right-2 top-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] text-white">
+                        {seconds(n.duration ?? n.endTime - n.startTime)}
+                      </span>
+                    </div>
+                    <div className="space-y-1.5 p-2.5">
+                      <div className="flex flex-wrap gap-1.5">
+                        <span className="chip bg-brand/15 text-brand-soft">{n.shotType}</span>
+                        <span className="chip bg-white/5 text-slate-400">{n.cameraMovement}</span>
+                      </div>
+                      <p className="font-mono text-[10px] text-slate-600">
+                        {timecode(n.startTime)} → {timecode(n.endTime)}
+                      </p>
+                      {n.visualDescription && (
+                        <p className="text-[11px] leading-relaxed text-slate-400">{n.visualDescription}</p>
+                      )}
+                      {n.dialogue && (
+                        <p className="text-[11px] leading-relaxed text-slate-300">「{n.dialogue}」</p>
+                      )}
+                      {n.aiPrompt?.imagePrompt && (
+                        <div className="rounded-lg border border-white/5 bg-black/30 p-2">
+                          <p className="mb-1 text-[10px] font-medium text-brand-soft">图 Prompt · Flux</p>
+                          <p className="break-words font-mono text-[10.5px] leading-relaxed text-slate-300">{n.aiPrompt.imagePrompt}</p>
+                        </div>
+                      )}
+                      {n.aiPrompt?.videoPrompt && (
+                        <div className="rounded-lg border border-white/5 bg-black/30 p-2">
+                          <p className="mb-1 text-[10px] font-medium text-brand-soft">视频 Prompt · Wan/Hunyuan</p>
+                          <p className="break-words font-mono text-[10.5px] leading-relaxed text-slate-300">{n.aiPrompt.videoPrompt}</p>
+                        </div>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 旁白结果 */}
+          {narrPhase === 'error' && narrError && (
+            <p className="rounded-xl border border-rose-500/20 bg-rose-500/[.06] px-3 py-2 text-[11.5px] leading-relaxed text-rose-200">
+              {narrError}
+            </p>
+          )}
+          {narrPhase === 'success' && narration && (
+            <div className="space-y-2 rounded-xl border border-white/5 bg-white/[.02] p-3">
+              <p className="text-[11.5px] font-medium text-slate-300">完整旁白 / 转写</p>
+              <textarea
+                className="h-32 w-full resize-y rounded-lg border border-white/5 bg-black/40 p-2 text-[11.5px] leading-relaxed text-slate-300"
+                readOnly
+                value={narration}
+              />
+              <div className="flex gap-2">
+                <button className="btn-ghost !py-1.5 !text-[11.5px]" onClick={() => navigator.clipboard?.writeText(narration)}>
+                  复制
+                </button>
+                <button
+                  className="btn-ghost !py-1.5 !text-[11.5px]"
+                  onClick={() => downloadText(`${baseName}_旁白.txt`, narration, 'text/plain;charset=utf-8')}
+                >
+                  下载
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}

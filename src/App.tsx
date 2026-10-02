@@ -5,6 +5,7 @@ import { Toolbar } from './components/Toolbar';
 import { TaskQueueList } from './components/TaskQueueList';
 import { SettingsPanel } from './components/SettingsPanel';
 import { StoryboardDrawer } from './components/StoryboardDrawer';
+import { VideoReversePanel } from './components/VideoReversePanel';
 import { Toaster, useToasts } from './components/Toaster';
 import { EnginePromo } from './components/EngineBadge';
 import { ClientFeed } from './components/ClientFeed';
@@ -71,6 +72,8 @@ export default function App() {
       <main className="mx-auto max-w-[1400px] space-y-4 px-5 py-5">
         <ClientFeed />
         <EnginePromo state={engineState} />
+
+        <VideoReversePanel />
 
         <UrlBatchInput
           onSubmit={(text) => void addUrls(text)}
