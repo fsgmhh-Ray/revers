@@ -36,9 +36,12 @@ export function VideoReversePanel() {
 
   /** 桌面端本地全流程：已下载到本机的视频路径 */
   const [localPath, setLocalPath] = useState('');
+  const [localDir, setLocalDir] = useState('');
   const [localPhase, setLocalPhase] = useState<Phase>('idle');
   const [localError, setLocalError] = useState('');
   const [localStage, setLocalStage] = useState('');
+  /** 本地全流程已耗时（秒），长任务没有计时会让人以为卡死 */
+  const [localElapsed, setLocalElapsed] = useState(0);
 
   /** LLM 配置自检：发真实最小请求验证 base/model/key */
   const [probeState, setProbeState] = useState<{ vision: string; text: string }>({ vision: '', text: '' });
@@ -75,6 +78,18 @@ export function VideoReversePanel() {
   // 分镜反推需要「视觉 LLM」；旁白转写需要「文本 LLM」（未填则复用视觉）
   const visionReady = Boolean(settings.llmBaseUrl && settings.llmModel);
   const textReady = Boolean((settings.llmTextBaseUrl && settings.llmTextModel) || visionReady);
+  /**
+   * 桌面端解析/下载的公共参数。
+   *
+   * 以前这里只传了 url/filename，结果：① 用户设置的下载目录被忽略，视频被丢到
+   * 系统盘默认目录（Ray 明确要求「不要放 C 盘」）；② 浏览器登录态没带上，
+   * YouTube 更容易撞风控。两处都在这里统一补齐。
+   */
+  const dlCommon = {
+    dir: settings.downloadDir || undefined,
+    cookieBrowser: settings.cookieBrowser && settings.cookieBrowser !== 'auto' ? settings.cookieBrowser : undefined,
+    cookieFile: settings.cookieFile || undefined,
+  };
   // 缺失项提示：只缺 key 时明确说「缺 Key」，避免用户看到「未配置」却不知道差什么
   const visionMissing = !settings.llmBaseUrl
     ? '视觉 LLM 缺 Base URL'
@@ -97,6 +112,33 @@ export function VideoReversePanel() {
   }, [api]);
 
   /**
+   * 订阅下载进度。
+   *
+   * 为什么必须有：桌面端「提取完整旁白」在链接没下载过时会先解析 + 下载
+   * （YouTube 视频动辄 30~40MB，要一两分钟），而这一段以前**完全没有进度回传**，
+   * 界面只显示一句固定的「解析并下载到本机」——用户看一分钟不动就会以为卡死了。
+   */
+  useEffect(() => {
+    if (!api) return;
+    return api.onDownloadProgress((event) => {
+      if (event?.error) return;
+      if (event?.done) {
+        setLocalStage('下载完成，开始本地处理');
+        return;
+      }
+      setLocalStage(`下载到本机 ${event?.percent ?? 0}%`);
+    });
+  }, [api]);
+
+  // 长任务计时：任一条链路在跑就每秒 +1，阶段文案旁边显示「已用 37s」
+  useEffect(() => {
+    const running = phase === 'analyzing' || narrPhase === 'analyzing' || localPhase === 'analyzing';
+    if (!running) return;
+    const t = setInterval(() => setLocalElapsed((v) => v + 1), 1000);
+    return () => clearInterval(t);
+  }, [phase, narrPhase, localPhase]);
+
+  /**
    * 桌面端本地全流程：解析 → 下载到本机 → 本地分镜 → 本地完整旁白。
    *
    * 全部走本机 IP，绕开 Pages 墙钟与机房 IP 风控（YouTube bot check 的根治解法）。
@@ -110,10 +152,11 @@ export function VideoReversePanel() {
     }
     setLocalPhase('analyzing');
     setLocalError('');
+    setLocalElapsed(0);
     setLocalStage('解析视频信息');
     try {
       const platform = detectPlatform(url.trim());
-      const parsed = await api.parse({ url: url.trim(), platform });
+      const parsed = await api.parse({ url: url.trim(), platform, ...dlCommon });
       if (!parsed.ok) throw new Error(parsed.error || '解析失败');
 
       setLocalStage('下载到本机');
@@ -124,10 +167,12 @@ export function VideoReversePanel() {
         platform,
         filename: fileName,
         sourceUrl: parsed.data.originalUrl,
+        ...dlCommon,
       });
       if (!dl.ok || !dl.path) throw new Error(dl.error || '下载失败，未拿到本地文件');
 
       setLocalPath(dl.path);
+      setLocalDir(dl.dir || '');
       setLocalStage('本地抽帧拆解分镜');
       const sb = await api.storyboard({
         id: `sb_${Date.now()}`,
@@ -150,7 +195,8 @@ export function VideoReversePanel() {
         try {
           const local = await localNarration(dl.path, llm, `nr_${Date.now()}`);
           if (local?.transcript) {
-            setNarration(local.transcript);
+            // 与「提取完整旁白」按钮保持同一套整理逻辑，否则一键流程出来的是挤成一坨的原文
+            setNarration(formatNarration(local.transcript));
             setNarrPhase('success');
           } else {
             setNarrError('旁白转写返回为空（该视频可能无人声）');
@@ -182,13 +228,14 @@ export function VideoReversePanel() {
     }
     setPhase('analyzing');
     setError('');
+    setLocalElapsed(0);
     try {
       // 桌面端：走本机 IP（解析→下载→本地分镜），避免云端内核的机房 IP 风控
       // 与 Pages 墙钟限制。云端内核对 YouTube 会直接返回 bot check。
       if (desktopReady) {
         setLocalStage('解析并下载到本机');
         const platform = detectPlatform(url.trim());
-        const parsed = await api!.parse({ url: url.trim(), platform });
+        const parsed = await api!.parse({ url: url.trim(), platform, ...dlCommon });
         if (!parsed.ok) throw new Error(parsed.error || '解析失败');
         const fileName = `${safeName(parsed.data.title || 'video')}.mp4`;
         const dl = await api!.download({
@@ -197,9 +244,11 @@ export function VideoReversePanel() {
           platform,
           filename: fileName,
           sourceUrl: parsed.data.originalUrl,
+          ...dlCommon,
         });
         if (!dl.ok || !dl.path) throw new Error(dl.error || '下载失败，未拿到本地文件');
         setLocalPath(dl.path);
+        setLocalDir(dl.dir || '');
         setLocalStage('本地抽帧拆解分镜');
         const sb = await api!.storyboard({
         id: `sb_${Date.now()}`,
@@ -244,6 +293,7 @@ export function VideoReversePanel() {
     }
     setNarrPhase('analyzing');
     setNarrError('');
+    setLocalElapsed(0);
     try {
       // 桌面端：无论是否已下载过，都走本机 IP（避免云端内核的机房 IP 风控 / Pages 墙钟）
       if (desktopReady && api) {
@@ -251,7 +301,7 @@ export function VideoReversePanel() {
         if (!target) {
           setLocalStage('解析并下载到本机');
           const p = detectPlatform(url.trim());
-          const parsed = await api.parse({ url: url.trim(), platform: p });
+          const parsed = await api.parse({ url: url.trim(), platform: p, ...dlCommon });
           if (!parsed.ok) throw new Error(parsed.error || '解析失败');
           const dl = await api.download({
             id: `rev_narr_${Date.now()}`,
@@ -259,10 +309,12 @@ export function VideoReversePanel() {
             platform: p,
             filename: `${safeName(parsed.data.title || 'video')}.mp4`,
             sourceUrl: parsed.data.originalUrl,
+            ...dlCommon,
           });
           if (!dl.ok || !dl.path) throw new Error(dl.error || '下载失败，未拿到本地文件');
           target = dl.path;
           setLocalPath(dl.path);
+          setLocalDir(dl.dir || '');
         }
         setLocalStage('本地转写旁白');
         const local = await localNarration(target, llm, `nr_${Date.now()}`);
@@ -347,7 +399,12 @@ export function VideoReversePanel() {
               <strong className="text-brand-soft">本地一键全流程</strong>：解析 → 下载到本机 → 本地分镜提示词 → 完整旁白，
               全部走你的家宽 IP（<span className="text-slate-400">YouTube / Instagram 的机房 IP 风控、Pages 10s 墙钟都绕开</span>）。
               需要先在下方填好「视觉 LLM」与「文本 LLM」。
-              {localStage && <span className="ml-1 text-slate-300">当前：{localStage}</span>}
+              {localStage && (
+                <span className="ml-1 text-slate-300">
+                  当前：{localStage}
+                  {busy && localElapsed > 0 && <span className="text-slate-400">（已用 {localElapsed}s）</span>}
+                </span>
+              )}
             </p>
           )}
 
@@ -358,7 +415,16 @@ export function VideoReversePanel() {
           )}
           {localPhase === 'success' && localPath && (
             <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/[.06] px-3 py-2 text-[11px] leading-relaxed text-emerald-200/90">
-              已完成：本地文件 <span className="break-all font-mono">{localPath}</span>
+              已完成（用时 {localElapsed}s）：本地文件 <span className="break-all font-mono">{localPath}</span>
+              {localDir &&
+                settings.downloadDir &&
+                localDir.replace(/[\\/]+$/, '').toLowerCase() !==
+                  settings.downloadDir.replace(/[\\/]+$/, '').toLowerCase() && (
+                  <span className="text-amber-200/90">
+                    {' '}
+                    ⚠️ 你设置的下载目录不可写，已自动回退到 <span className="font-mono">{localDir}</span>（请到「设置」改一个可写目录）
+                  </span>
+                )}
             </p>
           )}
 

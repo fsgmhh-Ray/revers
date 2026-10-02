@@ -76,9 +76,11 @@ export interface StoryboardStats {
   /** 毫秒 */
   avgShotDuration: number;
   cutRhythm: string;
-  /** local-ffmpeg | vision */
+  /** local-ffmpeg | local-ffmpeg+llm(n/m) | vision */
   analyzedBy: string;
   note: string;
+  /** 视觉 LLM 全部失败时的首个原因（用于诊断「为什么提示词是空的」） */
+  llmError?: string;
 }
 
 export interface StoryboardResult {

@@ -581,6 +581,69 @@ async function startDownload(payload, win) {
 }
 
 /* ------------------------------------------------------------------ */
+/* OpenAI 兼容端点规范化                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 把用户填的 Base URL 归一化成 `…/v1` 形态。
+ *
+ * 为什么必须归一化（实测踩过）：用户把 Base URL 写成
+ * `https://integrate.api.nvidia.com/v1/`（**末尾带斜线**，这是复制浏览器地址栏的
+ * 最常见形态），若只用 `endsWith('/v1')` 判断，末尾斜线会让判断落空，于是拼成
+ * `…/v1//v1/chat/completions` → 供应商返回 404，用户看到「端点不存在」却查不出原因。
+ * 反过来，用户把**完整端点**（`…/v1/chat/completions`）粘进来，也会拼出双份路径。
+ *
+ * 处理顺序：去空白 → 去尾斜线 → 补协议 → 剥掉误粘的端点路径 → 补 /v1。
+ * 这样下面四种写法都能得到同一个结果：
+ *   https://integrate.api.nvidia.com/v1/
+ *   https://integrate.api.nvidia.com/v1
+ *   integrate.api.nvidia.com/v1
+ *   https://integrate.api.nvidia.com/v1/chat/completions
+ */
+function normalizeBaseUrl(raw) {
+  let b = String(raw || '').trim().replace(/\/+$/, '');
+  if (!b) return '';
+  // 用户常只填 host（忘写协议）——补上 https:// 而不是直接报「解析失败」
+  if (!/^https?:\/\//i.test(b)) b = `https://${b}`;
+  // 剥掉误粘进来的端点路径（含 /v1 之后的尾巴）
+  b = b.replace(/\/(chat\/completions|completions|audio\/transcriptions|audio\/translations|models)$/i, '');
+  b = b.replace(/\/+$/, '');
+  // 版本段收尾（/v1、/openai/v1、/v1beta 等）才算合法根；否则补 /v1
+  if (!/\/v\d+[a-z]*$/i.test(b)) b = `${b}/v1`;
+  return b;
+}
+
+/** 规范化 Base URL + 拼端点路径；语法错误时抛出人类可读的原因 */
+function apiEndpoint(rawBase, endpointPath) {
+  const base = normalizeBaseUrl(rawBase);
+  if (!base) throw new Error('缺少 Base URL');
+  const url = `${base}${endpointPath}`;
+  try {
+    // eslint-disable-next-line no-new
+    new URL(url);
+  } catch {
+    throw new Error(`Base URL 无法识别：${String(rawBase || '').trim()}（应形如 https://api.groq.com/openai/v1）`);
+  }
+  return url;
+}
+
+/** 带超时的 fetch —— 供应商冷启动/挂死时不能把整条流水线一起拖住 */
+async function fetchWithTimeout(url, options = {}, timeoutMs = 120_000) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: ac.signal });
+  } catch (err) {
+    if (ac.signal.aborted || /abort/i.test(String((err && err.name) || err))) {
+      throw new Error(`请求超时（${Math.round(timeoutMs / 1000)}s）——供应商可能正在冷启动，或网络被拦`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Stage 2：分镜逆向（本地 FFmpeg 场景切分 + 关键帧抽取）               */
 /* ------------------------------------------------------------------ */
 
@@ -596,8 +659,13 @@ async function startDownload(payload, win) {
 
 const STORYBOARD_TMP = path.join(os.tmpdir(), 'cineflow-storyboard');
 
-/** 跑一个 ffmpeg / ffprobe 子进程；stdout 按二进制收集（抽帧可能用到） */
-function runFf(bin, args, { timeout = 300_000 } = {}) {
+/**
+ * 跑一个 ffmpeg / ffprobe 子进程；stdout 按二进制收集（抽帧可能用到）。
+ *
+ * onStdout/onStderr 是「流式钩子」，给长任务用来实时解析进度
+ * （例如场景切分要让用户看到百分比，而不是盯着一个不动的文案等一分钟）。
+ */
+function runFf(bin, args, { timeout = 300_000, onStdout, onStderr } = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn(resolveBinary(bin), args, { env: childEnv(), windowsHide: true });
     const chunks = [];
@@ -607,9 +675,26 @@ function runFf(bin, args, { timeout = 300_000 } = {}) {
       reject(new Error(`${bin} 执行超时`));
     }, timeout);
 
-    proc.stdout.on('data', (c) => chunks.push(c));
+    proc.stdout.on('data', (c) => {
+      chunks.push(c);
+      if (onStdout) {
+        try {
+          onStdout(c.toString());
+        } catch {
+          /* 进度回调失败不影响主流程 */
+        }
+      }
+    });
     proc.stderr.on('data', (c) => {
-      stderr += c.toString();
+      const text = c.toString();
+      stderr += text;
+      if (onStderr) {
+        try {
+          onStderr(text);
+        } catch {
+          /* 同上 */
+        }
+      }
     });
     proc.on('error', (err) => {
       clearTimeout(timer);
@@ -670,21 +755,43 @@ async function probeMedia(file) {
  * 先 `scale=320:-2` 再算 scene 分数 —— 缩略后再比较帧差，速度快一个数量级，
  * 对"哪一帧是切换点"的判定几乎没有影响（差异是全画面级的）。
  * showinfo 会把每帧信息打到 stderr，从中解析 pts_time 即切换时刻。
+ *
+ * 为什么必须回传进度：这一步是整条流水线最慢的环节（实测 4K AV1 的 5:51 视频
+ * 要 56 秒，长视频更久），期间 UI 只显示一句固定文案会让人以为卡死了。
+ * 用 `-nostats -progress pipe:1` 让 ffmpeg 把处理时间写到 stdout（顺便关掉 stderr
+ * 上每帧一行的统计刷屏，减少 IO），据此换算百分比。
+ *
+ * @param {string} file
+ * @param {number} threshold  场景切换阈值
+ * @param {(processedSeconds: number) => void} [onProgress] 已处理的视频时间（秒）
  */
-async function detectScenes(file, threshold = 0.3) {
+async function detectScenes(file, threshold = 0.3, onProgress) {
   const th = Math.min(0.9, Math.max(0.05, Number(threshold) || 0.3));
   const { stderr } = await runFf(
     'ffmpeg',
     [
       '-hide_banner',
       '-loglevel', 'info',
+      '-nostats',
+      '-progress', 'pipe:1',
       '-i', file,
       '-filter:v', `scale=320:-2,select='gt(scene,${th})',showinfo`,
       '-an',
       '-f', 'null',
       '-',
     ],
-    { timeout: 600_000 },
+    {
+      timeout: 900_000,
+      onStdout: onProgress
+        ? (text) => {
+            // -progress 每行形如 out_time=00:00:12.345678
+            const m = /out_time=(\d+):(\d+):([\d.]+)/.exec(text);
+            if (!m) return;
+            const sec = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+            if (sec > 0) onProgress(sec);
+          }
+        : undefined,
+    },
   );
 
   const cuts = [];
@@ -781,8 +888,17 @@ async function buildStoryboard(payload, win) {
   const media = await probeMedia(file);
   const duration = media.duration || 0;
 
-  send(12, '场景切分');
-  const cuts = await detectScenes(file, sceneThreshold);
+  // 场景切分是最慢的一步（4K AV1 约 10~12 秒/分钟素材）。把 ffmpeg 的处理进度
+  // 换算成百分比回传，避免用户盯着不动的文案误以为卡死。
+  const sceneStart = Date.now();
+  const sceneTick = (processedSec) => {
+    const ratio = duration > 0 ? Math.min(1, processedSec / duration) : 0;
+    const pct = Math.round(ratio * 100);
+    const elapsed = Math.round((Date.now() - sceneStart) / 1000);
+    send(2 + Math.round(ratio * 10), `场景切分 ${pct}%（已处理 ${processedSec.toFixed(0)}s / 用时 ${elapsed}s）`);
+  };
+  send(2, duration ? `场景切分 0%（共 ${Math.round(duration)}s 素材）` : '场景切分 0%');
+  const cuts = await detectScenes(file, sceneThreshold, duration > 0 ? sceneTick : undefined);
 
   // 边界：起点 + 切点 + 终点；过滤掉过近的切点，避免产生 0.1s 的碎片镜头
   const raw = [0, ...cuts.filter((t) => !duration || t < duration - 0.15), duration || cuts[cuts.length - 1] + 1];
@@ -831,10 +947,10 @@ async function buildStoryboard(payload, win) {
   send(98, '汇总');
   const avgShot = shotCount ? duration / shotCount : 0;
   const cutRhythm = avgShot < 1.5 ? '快剪（平均 < 1.5s）' : avgShot < 3 ? '中速（平均 1.5–3s）' : '慢节奏（平均 > 3s）';
-
   // 视觉 LLM 补全画面描述与提示词（可选；未配则保持纯本地抽帧结果）
   let llmEnriched = 0;
   let llmUsed = false;
+  let llmError = '';
   if (llmBaseUrl && llmModel && shotCount) {
     try {
       const r = await enrichStoryboardWithLLM({
@@ -846,9 +962,28 @@ async function buildStoryboard(payload, win) {
       });
       llmEnriched = r.enriched;
       llmUsed = !r.skipped;
-    } catch {
+      // 关键：以前这里的失败被 catch{} 完全吞掉，用户只看到「提示词是空的」却不知道为什么。
+      // 现在把首个失败原因带回去，让 UI 能直接告诉用户是 URL 错、Key 错还是超时。
+      llmError = r.error || '';
+    } catch (err) {
       llmUsed = false;
+      llmError = String((err && err.message) || err);
     }
+  }
+
+  // 关键帧已内联成 data URL，临时目录留着只是垃圾（长期会堆满 %TEMP%）：
+  // 先扫掉历史遗留，再删本次的目录。
+  sweepStoryboardTmp(dir);
+
+  let note;
+  if (!llmUsed) {
+    note = '镜头类型/运镜由剪辑时长推断；未配置视觉 LLM，台词与画面描述为空（可在 LLM 配置里填视觉 LLM 补全）';
+  } else if (llmEnriched === 0) {
+    note = `视觉 LLM 未能补全任何镜头，画面描述与提示词为空。原因：${llmError || '未知（可在 LLM 配置里点「测试」核对）'}`;
+  } else {
+    note = `镜头类型/运镜由剪辑时长推断；${llmEnriched}/${shotCount} 个镜头已由视觉 LLM 补全画面描述与提示词${
+      llmError ? `（部分帧失败：${llmError}）` : ''
+    }`;
   }
 
   return {
@@ -867,54 +1002,124 @@ async function buildStoryboard(payload, win) {
       sceneThreshold: Math.min(0.9, Math.max(0.05, Number(sceneThreshold) || 0.3)),
       avgShotDuration: Math.round(avgShot * 1000),
       cutRhythm,
-      analyzedBy: llmUsed ? `local-ffmpeg+llm(${llmEnriched}/${shotCount})` : 'local-ffmpeg',
-      note: llmUsed
-        ? `镜头类型/运镜由剪辑时长推断；${llmEnriched}/${shotCount} 个镜头已由视觉 LLM 补全画面描述与提示词`
-        : '镜头类型/运镜由剪辑时长推断；未配置视觉 LLM，台词与画面描述为空（可在设置里填视觉 LLM 补全）',
+      analyzedBy: llmEnriched ? `local-ffmpeg+llm(${llmEnriched}/${shotCount})` : 'local-ffmpeg',
+      llmError: llmError || undefined,
+      note,
     },
   };
 }
+
+/**
+ * 清理抽帧临时目录：只删「已经跑完的本次目录」与「超过 6 小时的历史遗留」。
+ * 用 mtime 判断，避免误删正在并发跑的另一个任务的目录。
+ */
+function sweepStoryboardTmp(currentDir, maxAgeMs = 6 * 3600 * 1000) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(STORYBOARD_TMP);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    const p = path.join(STORYBOARD_TMP, name);
+    if (p === currentDir) continue;
+    try {
+      const st = fs.statSync(p);
+      if (!st.isDirectory()) continue;
+      if (Date.now() - st.mtimeMs > maxAgeMs) fs.rmSync(p, { recursive: true, force: true });
+    } catch {
+      /* 清理失败不影响结果 */
+    }
+  }
+  if (currentDir) {
+    try {
+      fs.rmSync(currentDir, { recursive: true, force: true });
+    } catch {
+      /* 同上 */
+    }
+  }
+}
+
+/**
+ * 送进视觉 LLM 的关键帧上限。
+ *
+ * 为什么要封顶：大模型（尤其 NVIDIA 上 90B 级别的视觉模型）单次冷启动实测要
+ * **76 秒**，串行跑 20 多帧就是一小时的等待，用户只会以为卡死。
+ * 封顶 + 并发后，最坏情况也被限制在几分钟内，且多抽的帧照样有缩略图。
+ */
+const LLM_MAX_FRAMES = 12;
+/** 视觉 LLM 单次调用超时：冷启动可到 80s 量级，留足余量但不允许无限等 */
+const VISION_CALL_TIMEOUT_MS = 150_000;
 
 /**
  * 用视觉 LLM 补全分镜的画面描述与提示词（本地执行，请求从本机 IP 发出）。
  *
  * 复用 buildStoryboard 已抽好的关键帧（data URL），不再重复抽帧。
  * NVIDIA 免费端点每请求仅接受 1 张图，因此逐帧调用后再合并。
- * 任一帧失败不影响其余帧，保证「有多少算多少」。
+ * 任一帧失败不影响其余帧，保证「有多少算多少」；但会记录首个失败原因上浮给用户。
  */
 async function enrichStoryboardWithLLM({ nodes, llm, language, send, maxShots }) {
-  const baseUrl = (llm.llmBaseUrl || '').trim();
-  const model = (llm.llmModel || '').trim();
-  if (!baseUrl || !model) return { enriched: 0, skipped: true };
+  const model = String(llm.llmModel || '').trim();
+  if (!String(llm.llmBaseUrl || '').trim() || !model) return { enriched: 0, skipped: true };
 
-  const endpoint = baseUrl.endsWith('/v1') ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`;
-  const isNvidia = /nvidia/i.test(baseUrl);
+  // 归一化后再拼端点：修掉用户 Base URL 末尾带斜线 / 误粘完整端点导致的 404
+  const endpoint = apiEndpoint(llm.llmBaseUrl, '/chat/completions');
+  const isNvidia = /nvidia/i.test(String(llm.llmBaseUrl));
+
   // 帧数太多时按镜头间隔取样，避免一次请求过大、时间过长
-  const step = Math.max(1, Math.ceil(nodes.length / Math.max(1, maxShots || 24)));
-  const targets = nodes.filter((node, i) => i % step === 0 && node?.thumbnailUrl);
+  const budget = Math.min(LLM_MAX_FRAMES, Math.max(1, maxShots || LLM_MAX_FRAMES));
+  const step = Math.max(1, Math.ceil(nodes.length / budget));
+  const targets = nodes.filter((node, i) => i % step === 0 && node?.thumbnailUrl).slice(0, LLM_MAX_FRAMES);
 
   let enriched = 0;
-  for (const node of targets) {
-    try {
-      if (send) send(Math.min(97, 50 + Math.round((enriched / Math.max(1, targets.length)) * 46)), `AI 反推提示词 ${enriched + 1}/${targets.length}`);
-      const content = await callVisionEndpoint({ endpoint, apiKey: llm.llmApiKey, model, frame: node.thumbnailUrl, language, isNvidia });
-      if (content) {
-        node.visualDescription = content.visualDescription || node.visualDescription;
-        node.dialogue = content.dialogue || node.dialogue;
-        node.aiPrompt = {
-          imagePrompt: content.imagePrompt || '',
-          videoPrompt: content.videoPrompt || '',
-        };
-        enriched += 1;
+  let done = 0;
+  let firstError = '';
+  const started = Date.now();
+
+  // 并发 2：NVIDIA 免费端点对并发敏感，2 路既压住等待又不容易触发 429。
+  const worker = async () => {
+    for (;;) {
+      const node = targets.shift();
+      if (!node) return;
+      try {
+        const content = await callVisionEndpoint({
+          endpoint,
+          apiKey: llm.llmApiKey,
+          model,
+          frame: node.thumbnailUrl,
+          language,
+          isNvidia,
+        });
+        if (content) {
+          node.visualDescription = content.visualDescription || node.visualDescription;
+          node.dialogue = content.dialogue || node.dialogue;
+          node.aiPrompt = {
+            imagePrompt: content.imagePrompt || '',
+            videoPrompt: content.videoPrompt || '',
+          };
+          enriched += 1;
+        }
+      } catch (err) {
+        if (!firstError) firstError = String((err && err.message) || err).slice(0, 200);
+      } finally {
+        done += 1;
+        if (send) {
+          const elapsed = Math.round((Date.now() - started) / 1000);
+          // 用已完成数估算剩余时间，让长等待「看得见」
+          const eta = done ? Math.round((elapsed / done) * (targets.length + 1)) : 0;
+          send(
+            Math.min(97, 50 + Math.round((done / Math.max(1, done + targets.length || 1)) * 46)),
+            `AI 反推提示词 ${done}/${done + targets.length}（用时 ${elapsed}s${eta > elapsed ? `，约剩 ${eta - elapsed}s` : ''}）`,
+          );
+        }
       }
-    } catch {
-      // 单帧失败跳过，不让整体失败
     }
-  }
-  return { enriched, skipped: false };
+  };
+
+  await Promise.all([worker(), worker()]);
+  return { enriched, skipped: false, error: firstError };
 }
 
-/** 调用视觉 LLM（NVIDIA 走强制 JSON；其他端点也尝试 JSON） */
 /**
  * LLM 配置连通性自测（桌面端直连，不受浏览器 CORS 限制）。
  *
@@ -927,12 +1132,25 @@ async function enrichStoryboardWithLLM({ nodes, llm, language, send, maxShots })
  *       'text'   → 打 /v1/audio/transcriptions（0.2s 静音 WAV）
  */
 async function testLlmConfig({ kind, baseUrl, apiKey, model }) {
-  const base = String(baseUrl || '').trim();
+  const rawBase = String(baseUrl || '').trim();
   const m = String(model || '').trim();
-  if (!base) return { ok: false, message: '未填 Base URL' };
+  if (!rawBase) return { ok: false, message: '未填 Base URL' };
   if (!m) return { ok: false, message: '未填 Model' };
-  const endpoint = base.endsWith('/v1') ? base : `${base}/v1`;
+
+  let url;
+  let normalized;
+  try {
+    url = kind === 'text' ? apiEndpoint(rawBase, '/audio/transcriptions') : apiEndpoint(rawBase, '/chat/completions');
+    normalized = normalizeBaseUrl(rawBase);
+  } catch (err) {
+    return { ok: false, message: String((err && err.message) || err) };
+  }
+
+  // 把规范化结果一并回报：用户一眼能看出「我填的」与「实际请求的」差在哪
+  const note = normalized !== rawBase.replace(/\/+$/, '') ? `（已自动规范为 ${normalized}）` : '';
   const started = Date.now();
+  const timeout = kind === 'text' ? 90_000 : VISION_CALL_TIMEOUT_MS;
+
   try {
     if (kind === 'text') {
       // 44 字节 WAV 头 + 3200 字节静音（0.2s @16k mono）
@@ -955,34 +1173,53 @@ async function testLlmConfig({ kind, baseUrl, apiKey, model }) {
       const form = new FormData();
       form.append('file', new Blob([audio], { type: 'audio/wav' }), 'probe.wav');
       form.append('model', m);
-      const res = await fetch(`${endpoint}/audio/transcriptions`, {
-        method: 'POST',
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-        body: form,
-      });
+      const res = await fetchWithTimeout(
+        url,
+        { method: 'POST', headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {}, body: form },
+        timeout,
+      );
       const ms = Date.now() - started;
-      if (res.ok) return { ok: true, message: `可用（${ms}ms，探针音频无内容属正常）` };
+      if (res.ok) return { ok: true, message: `可用（${ms}ms，探针音频无内容属正常）${note}` };
       const t = await res.text().catch(() => '');
-      if (res.status === 401 || res.status === 403) return { ok: false, message: 'Key 无效或无权限（401/403）' };
-      if (res.status === 404) return { ok: false, message: '该端点不存在（404）——此供应商可能不支持音频转写' };
-      return { ok: false, message: `HTTP ${res.status}：${t.slice(0, 140)}` };
+      if (res.status === 401 || res.status === 403) return { ok: false, message: `Key 无效或无权限（401/403）${note}` };
+      if (res.status === 404) {
+        return { ok: false, message: `该端点不存在（404）——此供应商可能不支持音频转写${note} 返回：${t.slice(0, 100)}` };
+      }
+      return { ok: false, message: `HTTP ${res.status}：${t.slice(0, 140)}${note}` };
     }
 
     // vision：最小文本请求
-    const res = await fetch(`${endpoint}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-      body: JSON.stringify({ model: m, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
-    });
+    const res = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+        body: JSON.stringify({ model: m, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
+      },
+      timeout,
+    );
     const ms = Date.now() - started;
-    if (res.ok) return { ok: true, message: `可用（${ms}ms）` };
+    if (res.ok) {
+      // 90B 级别的视觉模型冷启动实测要 76 秒，慢不等于坏——把预期讲清楚
+      const slow = ms > 20_000 ? `，首次调用约 20–80s 属冷启动正常现象` : '';
+      return { ok: true, message: `可用（${ms}ms${slow}）${note}` };
+    }
     const t = await res.text().catch(() => '');
-    if (res.status === 401 || res.status === 403) return { ok: false, message: 'Key 无效或无权限（401/403）' };
-    if (res.status === 404) return { ok: false, message: '端点不存在（404，检查 Base URL 是否含 /v1）' };
-    if (res.status === 429) return { ok: false, message: '速率限制或额度用尽（429）' };
-    return { ok: false, message: `HTTP ${res.status}：${t.slice(0, 140)}` };
+    if (res.status === 401 || res.status === 403) return { ok: false, message: `Key 无效或无权限（401/403）${note}` };
+    if (res.status === 404) {
+      // NVIDIA 对「模型名不存在」也回 404，且响应体只有一句 "404 page not found"，
+      // 所以不能只怪 URL——两种可能都要说清楚，并把上游原文带出来。
+      return {
+        ok: false,
+        message:
+          `404：路径或模型名不对${note}。请核对 Base URL 与 Model（NVIDIA 的模型名形如 meta/llama-3.2-11b-vision-instruct）。` +
+          ` 上游返回：${t.slice(0, 100) || '(空)'}`,
+      };
+    }
+    if (res.status === 429) return { ok: false, message: `速率限制或额度用尽（429）${note}` };
+    return { ok: false, message: `HTTP ${res.status}：${t.slice(0, 140)}${note}` };
   } catch (err) {
-    return { ok: false, message: `连接失败：${String((err && err.message) || err)}` };
+    return { ok: false, message: `连接失败：${String((err && err.message) || err)}${note}` };
   }
 }
 
@@ -1008,11 +1245,15 @@ async function callVisionEndpoint({ endpoint, apiKey, model, frame, language, is
   // NVIDIA 免费端点需要显式 JSON 模式；其他端点加了也能兼容主流服务
   body.response_format = { type: 'json_object' };
 
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-    body: JSON.stringify(body),
-  });
+  const res = await fetchWithTimeout(
+    endpoint,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+      body: JSON.stringify(body),
+    },
+    VISION_CALL_TIMEOUT_MS,
+  );
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     throw new Error(`视觉 LLM HTTP ${res.status}: ${t.slice(0, 160)}`);
@@ -1151,11 +1392,13 @@ function makeWav(buf, fmt, dataOffset, dataLen) {
   return Buffer.concat([header, buf.subarray(dataOffset, dataOffset + dataLen)]);
 }
 
-/** 拼接 OpenAI 兼容的 base URL 与端点路径（避免 /v1/v1） */
+/** 拼接 OpenAI 兼容的转写端点（统一走 normalizeBaseUrl，避免 /v1/v1） */
 function transcriptionEndpoint(base) {
-  const b = String(base || '').replace(/\/+$/, '');
-  return b.endsWith('/v1') ? `${b}/audio/transcriptions` : `${b}/v1/audio/transcriptions`;
+  return apiEndpoint(base, '/audio/transcriptions');
 }
+
+/** 转写单块音频的超时：一块最长约 12 分钟音频，给足 10 分钟 */
+const TRANSCRIBE_TIMEOUT_MS = 600_000;
 
 /** 送一块音频到 OpenAI 兼容端点转写 */
 async function transcribeOnce({ url, apiKey, model, language, audio }) {
@@ -1164,7 +1407,11 @@ async function transcribeOnce({ url, apiKey, model, language, audio }) {
   form.append('model', model || 'whisper-1');
   if (language) form.append('language', language);
 
-  const res = await fetch(url, { method: 'POST', headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {}, body: form });
+  const res = await fetchWithTimeout(
+    url,
+    { method: 'POST', headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {}, body: form },
+    TRANSCRIBE_TIMEOUT_MS,
+  );
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     throw new Error(`转写失败 (HTTP ${res.status}): ${t.slice(0, 220)}`);
@@ -1212,11 +1459,22 @@ async function buildNarration(payload, win) {
   const wav = path.join(dir, 'audio.wav');
 
   try {
-    send(18, '抽取音轨');
+    send(18, '抽取音轨 0%');
+    const extractStart = Date.now();
     await runFf('ffmpeg', [
-      '-hide_banner', '-loglevel', 'error', '-y',
+      '-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1', '-y',
       '-i', file, '-vn', '-ac', '1', '-ar', '16000', wav,
-    ], { timeout: 900_000 });
+    ], {
+      timeout: 900_000,
+      // 长视频抽轨也要几十秒，回传已处理的音频时长，别让进度条看着不动
+      onStdout: (text) => {
+        const m = /out_time=(\d+):(\d+):([\d.]+)/.exec(text);
+        if (!m) return;
+        const sec = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+        if (sec <= 0) return;
+        send(18 + Math.min(20, Math.round(sec / 60)), `抽取音轨 ${sec.toFixed(0)}s（用时 ${Math.round((Date.now() - extractStart) / 1000)}s）`);
+      },
+    });
 
     const buf = fs.readFileSync(wav);
     const url = transcriptionEndpoint(String(llmTextBaseUrl).trim());
