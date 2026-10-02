@@ -327,14 +327,42 @@ async function buildStoryboard(videoPath, opts, llm) {
     '}\n' +
     `storyboards 数量应等于 ${frames.length}。dialogue 若视频无台词可留空。`;
 
-  const content = await callVision({ ...llm, frames, system, userText });
-
+  // NVIDIA 免费端点限制每请求最多 1 张图（At most 1 image(s) may be provided）。
+  // 多帧时改为逐帧调用，每帧产出 1 个分镜节点再拼装；其余供应商走原单次多图调用。
+  const isNvidia = (llm.baseUrl || '').toLowerCase().includes('nvidia');
   let parsed;
-  try {
-    parsed = parseJsonRobust(content);
-  } catch {
-    throw new Error('LLM 返回无法解析为 JSON（可能模型不支持结构化输出，请换用 GPT-4o / Groq / NIM 等）');
+  if (isNvidia && frames.length > 1) {
+    const perFrame = [];
+    for (let i = 0; i < frames.length; i++) {
+      const f = frames[i];
+      const oneText =
+        `这是短视频的第 ${i + 1}/${frames.length} 张关键帧，时间点约 ${f.start.toFixed(1)}s。\n` +
+        '请只为这一帧逆向拆解出一个分镜，务必只返回 JSON（不要任何解释或 markdown 代码块）：\n' +
+        '{\n' +
+        '  "shotType": "特写(CU)|近景(MCU)|中景(MS)|全景(WS)|远景(LS)|极远景(ELS)",\n' +
+        '  "cameraMovement": "快切(Cut)|固定(Static)|推(Track in)|拉(Track out)|摇(Pan/Tilt)|移(Truck)|跟(Follow)",\n' +
+        '  "dialogue": "该镜头内的台词/旁白原文（无则空字符串）",\n' +
+        '  "visualDescription": "画面内容中文描述（谁、在哪、做什么、构图、光线）",\n' +
+        '  "aiPrompt": { "imagePrompt": "适配 Flux.1 的生图英文 Prompt", "videoPrompt": "适配 Wan2.1/Hunyuan 的动效英文 Prompt" }\n' +
+        '}';
+      const c = await callVision({ ...llm, frames: [f], system, userText: oneText });
+      try {
+        const one = parseJsonRobust(c);
+        perFrame.push(Array.isArray(one) ? one[0] : one?.storyboards?.[0] || one || {});
+      } catch {
+        perFrame.push({});
+      }
+    }
+    parsed = { globalStyle: '', storyboards: perFrame };
+  } else {
+    const content = await callVision({ ...llm, frames, system, userText });
+    try {
+      parsed = parseJsonRobust(content);
+    } catch {
+      throw new Error('LLM 返回无法解析为 JSON（可能模型不支持结构化输出，请换用 GPT-4o / Groq / NIM 等）');
+    }
   }
+
   const list = Array.isArray(parsed) ? parsed : parsed?.storyboards || parsed?.storyboard || [];
   if (!Array.isArray(list)) throw new Error('LLM 返回结构不符合预期');
 
