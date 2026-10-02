@@ -308,6 +308,46 @@ export function SettingsPanel({ open, settings, health, engine, onClose, onChang
             </div>
           </section>
 
+          <section className="mb-6">
+            <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+              云端反推 · LLM 配置（BYOK）
+            </h3>
+            <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
+              用于「视频反推提示词」与「完整旁白」功能。支持任意 OpenAI 兼容端点（NVIDIA NIM / Groq / DeepSeek / Grok / OpenAI）。
+              密钥只存你本机浏览器，不落第三方。
+            </p>
+            <div className="space-y-2 rounded-xl border border-white/5 bg-white/[.02] p-3">
+              <input
+                className="field w-full !py-1.5 text-[12px]"
+                placeholder="Base URL（如 https://integrate.api.nvidia.com/v1）"
+                value={settings.llmBaseUrl}
+                onChange={(e) => onChange('llmBaseUrl', e.target.value)}
+              />
+              <input
+                className="field w-full !py-1.5 text-[12px]"
+                placeholder="Model（如 gpt-4o-mini / llama-3.1-8b-instant）"
+                value={settings.llmModel}
+                onChange={(e) => onChange('llmModel', e.target.value)}
+              />
+              <input
+                className="field w-full !py-1.5 text-[12px]"
+                type="password"
+                placeholder="API Key（视供应商，可留空）"
+                value={settings.llmApiKey}
+                onChange={(e) => onChange('llmApiKey', e.target.value)}
+              />
+              <input
+                className="field w-full !py-1.5 text-[12px]"
+                placeholder="转写语言（可选，如 zh / en）"
+                value={settings.llmLanguage}
+                onChange={(e) => onChange('llmLanguage', e.target.value)}
+              />
+              <p className="text-[10.5px] leading-relaxed text-slate-500">
+                /v1/chat/completions 走反推，/v1/audio/transcriptions 走转写。填好 Base URL + Model 即可用。
+              </p>
+            </div>
+          </section>
+
           {desktopReady && (
             <section className="mb-6">
               <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">下载位置</h3>
