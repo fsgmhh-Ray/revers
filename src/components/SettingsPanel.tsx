@@ -352,13 +352,16 @@ export function SettingsPanel({ open, settings, health, engine, onClose, onChang
             {/* 文本 LLM（旁白转写） */}
             <div className="mt-2 space-y-2 rounded-xl border border-white/5 bg-white/[.02] p-3">
               <div className="flex items-center justify-between">
-                <span className="text-[11.5px] font-medium text-slate-300">文本 LLM（旁白转写 · 可选）</span>
+                <span className="text-[11.5px] font-medium text-slate-300">文本 LLM（旁白转写）</span>
                 {settings.llmTextBaseUrl && settings.llmTextModel ? (
                   <span className="text-[10.5px] text-emerald-300/80">已配置</span>
                 ) : (
                   <span className="text-[10.5px] text-slate-500">留空=复用视觉</span>
                 )}
               </div>
+              <p className="-mt-1 text-[10.5px] leading-relaxed text-slate-500">
+                已预填 Groq whisper-large-v3（OpenAI 兼容 REST）。只需把 Groq API Key 贴进下面的 Key 框即可用，无需自建。
+              </p>
               <input
                 className="field w-full !py-1.5 text-[12px]"
                 placeholder="Base URL（如 https://api.groq.com/openai/v1）"

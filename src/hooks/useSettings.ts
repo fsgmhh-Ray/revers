@@ -35,6 +35,15 @@ export interface Settings {
   llmLanguage: string;
 }
 
+/**
+ * 旁白转写（ASR）默认走 Groq whisper-large-v3（OpenAI 兼容 REST，免费、无需自建）。
+ * 已实测端到端跑通：下载 → ffmpeg 抽音轨 → POST /v1/audio/transcriptions → 返回文本。
+ * 视觉 LLM（分镜反推）复用 NVIDIA llama-3.2-90b-vision；两者 key 各自 BYOK，不落盘第三方。
+ * 注意：这里只预填非敏感的 base URL + model，API Key 必须由用户自己填（避免烤进前端 bundle）。
+ */
+const NARRATION_DEFAULT_BASE = 'https://api.groq.com/openai/v1';
+const NARRATION_DEFAULT_MODEL = 'whisper-large-v3';
+
 const STORAGE_KEY = 'reverse-cineflowing:settings';
 
 const DEFAULTS: Settings = {
@@ -50,9 +59,9 @@ const DEFAULTS: Settings = {
   llmBaseUrl: '',
   llmApiKey: '',
   llmModel: '',
-  llmTextBaseUrl: '',
+  llmTextBaseUrl: NARRATION_DEFAULT_BASE,
   llmTextApiKey: '',
-  llmTextModel: '',
+  llmTextModel: NARRATION_DEFAULT_MODEL,
   llmLanguage: '',
 };
 
