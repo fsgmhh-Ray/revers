@@ -1078,9 +1078,11 @@ async function enrichStoryboardWithLLM({ nodes, llm, language, send, maxShots })
   const budget = Math.min(LLM_MAX_FRAMES, Math.max(1, maxShots || LLM_MAX_FRAMES));
   const step = Math.max(1, Math.ceil(nodes.length / budget));
   const targets = nodes.filter((node, i) => i % step === 0 && node?.thumbnailUrl).slice(0, LLM_MAX_FRAMES);
+  const totalTargets = targets.length;
 
   let enriched = 0;
   let done = 0;
+  let emptyReturns = 0;
   let firstError = '';
   let budgetExceeded = 0;
   const started = Date.now();
@@ -1111,7 +1113,12 @@ async function enrichStoryboardWithLLM({ nodes, llm, language, send, maxShots })
             imagePrompt: content.imagePrompt || '',
             videoPrompt: content.videoPrompt || '',
           };
-          enriched += 1;
+          // 画面描述拿到了才算补全成功：只有空 JSON 骨架（{}）不算
+          if (node.visualDescription || node.aiPrompt.imagePrompt) enriched += 1;
+          else emptyReturns += 1;
+        } else {
+          // 调用成功但内容为空 —— 以前这种「静默丢帧」完全不可见
+          emptyReturns += 1;
         }
       } catch (err) {
         if (!firstError) firstError = String((err && err.message) || err).slice(0, 200);
@@ -1120,10 +1127,10 @@ async function enrichStoryboardWithLLM({ nodes, llm, language, send, maxShots })
         if (send) {
           const elapsed = Math.round((Date.now() - started) / 1000);
           // 用已完成数估算剩余时间，让长等待「看得见」
-          const eta = done ? Math.round((elapsed / done) * (targets.length + 1)) : 0;
+          const eta = done ? Math.round((elapsed / done) * totalTargets) : 0;
           send(
-            Math.min(97, 50 + Math.round((done / Math.max(1, done + targets.length || 1)) * 46)),
-            `AI 反推提示词 ${done}/${done + targets.length}（用时 ${elapsed}s${eta > elapsed ? `，约剩 ${eta - elapsed}s` : ''}）`,
+            Math.min(97, 50 + Math.round((done / Math.max(1, totalTargets)) * 46)),
+            `AI 反推提示词 ${done}/${totalTargets}（用时 ${elapsed}s${eta > elapsed ? `，约剩 ${eta - elapsed}s` : ''}）`,
           );
         }
       }
@@ -1135,6 +1142,9 @@ async function enrichStoryboardWithLLM({ nodes, llm, language, send, maxShots })
     firstError =
       firstError ||
       `视觉 LLM 总耗时超过 ${Math.round(LLM_TOTAL_BUDGET_MS / 60000)} 分钟预算，已跳过剩余 ${budgetExceeded} 帧（当前模型太慢，建议换 meta/llama-3.2-11b-vision-instruct 这类小模型）`;
+  }
+  if (!firstError && emptyReturns > 0) {
+    firstError = `有 ${emptyReturns} 帧模型返回为空（其余正常）`;
   }
   return { enriched, skipped: false, error: firstError };
 }
@@ -1289,12 +1299,19 @@ async function callVisionEndpoint({ endpoint, apiKey, model, frame, language, is
   if (fence) s = fence[1].trim();
   const start = s.indexOf('{');
   const end = s.lastIndexOf('}');
-  if (start === -1 || end <= start) return null;
-  try {
-    return JSON.parse(s.slice(start, end + 1));
-  } catch {
-    return null;
+  if (start !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(s.slice(start, end + 1));
+      // 带上原始文本：模型偶发只给 human-readable 描述、不给 JSON 时仍有东西可用
+      return { ...parsed, rawText: raw.slice(0, 400) };
+    } catch {
+      /* 落到下面的兜底 */
+    }
   }
+  // 兜底：模型返回了内容但不是 JSON。以前这里直接 return null，
+  // 等于把一次成功的 API 调用白白丢掉（实测 9 帧里有 5 帧栽在这）。
+  // 现在把正文当画面描述交出去，至少不浪费。
+  return { visualDescription: raw.trim().slice(0, 200), rawText: raw.slice(0, 400) };
 }
 
 /* ------------------------------------------------------------------ */
