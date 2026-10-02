@@ -51,6 +51,11 @@ export interface CookieFileInfo {
  */
 export type ElectronParseResult = { ok: true; data: VideoMetadata } | { ok: false; error: string };
 
+/** 本地旁白转写结果（与主进程 buildNarration 的返回对应） */
+export type ElectronNarrationResult =
+  | { ok: true; id?: string; transcript: string; provider?: string; model?: string }
+  | { ok: false; error: string };
+
 export interface ElectronAPI {
   hello(): Promise<ElectronHello>;
   parse(payload: {
@@ -90,6 +95,20 @@ export interface ElectronAPI {
     maxShots?: number;
     frameWidth?: number;
   }): Promise<StoryboardResult>;
+  /**
+   * 完整旁白 / 语音转写（本地执行）。
+   *
+   * 桌面端走本机 IP + 本地 ffmpeg 抽音轨，再把音频送去 OpenAI 兼容 ASR
+   * （默认 Groq whisper-large-v3），长音频在内核侧自动分块。
+   */
+  narration(payload: {
+    id: string;
+    path: string;
+    llmTextBaseUrl?: string;
+    llmTextApiKey?: string;
+    llmTextModel?: string;
+    language?: string;
+  }): Promise<ElectronNarrationResult>;
   onStoryboardProgress(handler: (event: StoryboardProgress) => void): () => void;
   onDownloadProgress(handler: ElectronProgressHandler): () => void;
   /** 运营投放（升级 / 广告 / 推广）拉取与订阅 */
@@ -113,6 +132,32 @@ export function detectElectron(): boolean {
 
 export function getElectronAPI(): ElectronAPI | null {
   return detectElectron() ? window.electronAPI! : null;
+}
+
+/**
+ * 桌面端本地旁白转写。
+ *
+ * 与云端内核 (/api/narration) 的差别：桌面端全程在本机跑（ffmpeg 抽音轨 +
+ * 本机出口 IP 发 ASR 请求），因此不受 Pages 墙钟限制，也不受机房 IP 风控影响。
+ * 非桌面端环境返回 null，由调用方回退到云端。
+ */
+export async function localNarration(
+  videoPath: string,
+  llm: { llmTextBaseUrl?: string; llmTextApiKey?: string; llmTextModel?: string; llmLanguage?: string },
+  id = `nr_${Date.now()}`,
+): Promise<{ transcript: string; provider?: string; model?: string } | null> {
+  const api = getElectronAPI();
+  if (!api?.narration) return null;
+  const res = await api.narration({
+    id,
+    path: videoPath,
+    llmTextBaseUrl: llm.llmTextBaseUrl,
+    llmTextApiKey: llm.llmTextApiKey,
+    llmTextModel: llm.llmTextModel,
+    language: llm.llmLanguage,
+  });
+  if (!res.ok) throw new EngineError('electron', res.error || '本地旁白转写失败');
+  return { transcript: res.transcript, provider: res.provider, model: res.model };
 }
 
 export function createElectronEngine(caps: EngineCapabilities): Engine {

@@ -3,7 +3,7 @@ import type { TaskItem } from '../types/parser';
 import type { AnalysisStatus, StoryboardResult } from '../types/storyboard';
 import { proxyUrl } from '../utils/downloader';
 import { platformMeta } from '../utils/platform';
-import { getElectronAPI } from '../services/electronBridge';
+import { getElectronAPI, localNarration } from '../services/electronBridge';
 import { downloadText, safeName, seconds, timecode, toCsv, toMarkdown } from '../utils/storyboard';
 import { useSettings } from '../hooks/useSettings';
 import { cloudNarration, cloudStoryboard, type LlmCfg } from '../services/cloudBridge';
@@ -174,6 +174,15 @@ export function StoryboardDrawer({
     setNarrStatus('working');
     setNarrError('');
     try {
+      // 桌面端且已下载到本机 → 本地转写（本机 ffmpeg + 本机出口，不受 Pages 墙钟/机房 IP 影响）
+      if (desktopReady && hasLocal) {
+        const local = await localNarration(task.savedPath!, llmCfg, `${task.id}_narr`);
+        if (local?.transcript) {
+          setNarration(local.transcript);
+          setNarrStatus('done');
+          return;
+        }
+      }
       const data = await cloudNarration(storyboardUrl, llmCfg);
       if (data?.status === 'error') {
         setNarrStatus('error');

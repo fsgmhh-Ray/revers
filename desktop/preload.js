@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cookieInfo: (payload) => ipcRenderer.invoke('cineflow:cookie-info', payload),
   // Stage 2：本地 FFmpeg 分镜逆向
   storyboard: (payload) => ipcRenderer.invoke('cineflow:storyboard', payload),
+  // 完整旁白 / 语音转写（本地抽音轨 + ASR）
+  narration: (payload) => ipcRenderer.invoke('cineflow:narration', payload),
   onStoryboardProgress: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on('cineflow:storyboard-progress', listener);

@@ -68,7 +68,9 @@ async function main() {
     const extractDir = path.join(os.tmpdir(), 'ffmpeg-win');
     fs.rmSync(extractDir, { recursive: true, force: true });
     fs.mkdirSync(extractDir, { recursive: true });
-    await run('tar', ['-xf', zip, '-C', extractDir]);
+    // --force-local：Git Bash 下的 GNU tar 会把 "D:\..." / "C:\..." 里的盘符当成
+    // 远程主机名（报 "Cannot connect to D: resolve failed"），必须显式声明是本地文件。
+    await run('tar', ['--force-local', '-xf', zip, '-C', extractDir]);
     const found = findFile(extractDir, ['ffmpeg.exe', 'ffprobe.exe']);
     for (const [name, src] of Object.entries(found)) {
       fs.copyFileSync(src, path.join(BIN_DIR, name));
@@ -84,7 +86,7 @@ async function main() {
     const extractDir = path.join(os.tmpdir(), 'ffmpeg-linux');
     fs.rmSync(extractDir, { recursive: true, force: true });
     fs.mkdirSync(extractDir, { recursive: true });
-    await run('tar', ['-xf', tarPath, '-C', extractDir, '--strip-components=1']);
+    await run('tar', ['--force-local', '-xf', tarPath, '-C', extractDir, '--strip-components=1']);
     for (const name of ['ffmpeg', 'ffprobe']) {
       const src = path.join(extractDir, name);
       if (fs.existsSync(src)) {

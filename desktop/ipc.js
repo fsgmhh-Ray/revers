@@ -851,6 +851,222 @@ async function buildStoryboard(payload, win) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 完整旁白 / 语音转写                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 单次转写的音频体积上限（字节）。Groq 免费端点实测 25MB 即 413
+ * （16k 单声道 WAV ≈ 13 分钟），留 2MB 余量避免 multipart 边界顶过线。
+ */
+const MAX_AUDIO_BYTES = 24 * 1024 * 1024;
+
+/** 判断视频是否含音轨（ffprobe 查音频流） */
+async function hasAudioStream(file) {
+  try {
+    const { stdout } = await runFf(
+      'ffprobe',
+      ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', file],
+      { timeout: 60_000 },
+    );
+    return stdout.toString().trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 把 WAV 缓冲区切成若干 ≤maxBytes 的合法 WAV 块，切点尽量落在静音处。
+ * 与 parser-core 内核的同名逻辑保持一致（纯 Node 实现，不引第三方依赖）。
+ * 非 16-bit PCM 或非 WAV 时返回 []，由调用方回退单次请求。
+ */
+function splitWavChunks(buf, maxBytes) {
+  if (buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') return [];
+  let pos = 12;
+  let fmt = null;
+  let dataStart = -1;
+  let dataLen = 0;
+  while (pos + 8 <= buf.length) {
+    const id = buf.toString('ascii', pos, pos + 4);
+    const size = buf.readUInt32LE(pos + 4);
+    const body = pos + 8;
+    if (id === 'fmt ') {
+      fmt = {
+        audioFormat: buf.readUInt16LE(body),
+        channels: buf.readUInt16LE(body + 2),
+        sampleRate: buf.readUInt32LE(body + 4),
+        bitsPerSample: buf.readUInt16LE(body + 14),
+      };
+    } else if (id === 'data') {
+      dataStart = body;
+      dataLen = Math.min(size, buf.length - body);
+      break;
+    }
+    pos = body + size + (size % 2);
+  }
+  if (!fmt || dataStart < 0) return [];
+  if (fmt.audioFormat !== 1 || fmt.bitsPerSample !== 16) return [];
+
+  const bytesPerFrame = 2 * fmt.channels;
+  const targetData = maxBytes - 44 - 4096;
+  if (dataLen <= targetData) return [];
+  const threshold = targetData - targetData * 0.15;
+  const windowFrames = Math.max(1, Math.floor(fmt.sampleRate * 0.02));
+
+  const isSilentAround = (frameIdx) => {
+    const startFrame = Math.max(0, frameIdx - windowFrames);
+    const endFrame = Math.min(dataLen / bytesPerFrame, frameIdx + windowFrames);
+    let peak = 0;
+    for (let f = startFrame; f < endFrame; f++) {
+      const s = Math.abs(buf.readInt16LE(dataStart + f * bytesPerFrame));
+      if (s > peak) peak = s;
+    }
+    return peak < 900;
+  };
+
+  const chunks = [];
+  let segStart = 0;
+  const totalFrames = Math.floor(dataLen / bytesPerFrame);
+  while (segStart < dataLen) {
+    if (dataLen - segStart <= targetData) {
+      chunks.push(makeWav(buf, fmt, dataStart + segStart, dataLen - segStart));
+      break;
+    }
+    const targetFrame = Math.floor((segStart + threshold) / bytesPerFrame);
+    const searchRadius = fmt.sampleRate * 5;
+    let cutFrame = -1;
+    for (let f = targetFrame; f < Math.min(totalFrames, targetFrame + searchRadius); f++) {
+      if (isSilentAround(f)) {
+        cutFrame = f;
+        break;
+      }
+    }
+    const cutByte = cutFrame > 0 ? cutFrame * bytesPerFrame : Math.floor(threshold);
+    if (cutByte <= 0) break;
+    chunks.push(makeWav(buf, fmt, dataStart + segStart, cutByte));
+    segStart += cutByte;
+  }
+  return chunks;
+}
+
+/** 从源 WAV 的 data 段切一段，拼成独立合法 WAV */
+function makeWav(buf, fmt, dataOffset, dataLen) {
+  const header = Buffer.alloc(44);
+  const byteRate = (fmt.sampleRate * fmt.channels * fmt.bitsPerSample) / 8;
+  header.write('RIFF', 0, 'ascii');
+  header.writeUInt32LE(36 + dataLen, 4);
+  header.write('WAVE', 8, 'ascii');
+  header.write('fmt ', 12, 'ascii');
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(fmt.audioFormat, 20);
+  header.writeUInt16LE(fmt.channels, 22);
+  header.writeUInt32LE(fmt.sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE((fmt.channels * fmt.bitsPerSample) / 8, 32);
+  header.writeUInt16LE(fmt.bitsPerSample, 34);
+  header.write('data', 36, 'ascii');
+  header.writeUInt32LE(dataLen, 40);
+  return Buffer.concat([header, buf.subarray(dataOffset, dataOffset + dataLen)]);
+}
+
+/** 拼接 OpenAI 兼容的 base URL 与端点路径（避免 /v1/v1） */
+function transcriptionEndpoint(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  return b.endsWith('/v1') ? `${b}/audio/transcriptions` : `${b}/v1/audio/transcriptions`;
+}
+
+/** 送一块音频到 OpenAI 兼容端点转写 */
+async function transcribeOnce({ url, apiKey, model, language, audio }) {
+  const form = new FormData();
+  form.append('file', new Blob([audio], { type: 'audio/wav' }), 'audio.wav');
+  form.append('model', model || 'whisper-1');
+  if (language) form.append('language', language);
+
+  const res = await fetch(url, { method: 'POST', headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {}, body: form });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`转写失败 (HTTP ${res.status}): ${t.slice(0, 220)}`);
+  }
+  const j = await res.json().catch(() => ({}));
+  const text = j?.text || j?.transcript || '';
+  if (!text) throw new Error('转写返回为空（供应商未返回 text 字段）');
+  return text;
+}
+
+/**
+ * 完整旁白 / 转写：抽音轨 → OpenAI 兼容 ASR。
+ * 超过体积上限时自动按静音切块逐块转写再拼接（长视频兜底）。
+ */
+async function buildNarration(payload, win) {
+  const {
+    id = `nr_${Date.now()}`,
+    path: file,
+    llmTextBaseUrl,
+    llmTextApiKey,
+    llmTextModel,
+    language,
+  } = payload || {};
+
+  if (!file || !fs.existsSync(file)) {
+    throw new Error('找不到本地视频文件，请先下载到本机再转写');
+  }
+  if (!llmTextBaseUrl || !String(llmTextBaseUrl).trim()) {
+    throw new Error('请在设置里填写「文本 LLM（旁白转写）」的 Base URL（如 https://api.groq.com/openai/v1）');
+  }
+
+  const send = (percent, stage) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('cineflow:storyboard-progress', { id, percent, stage });
+    }
+  };
+
+  send(5, '检测音轨');
+  if (!(await hasAudioStream(file))) {
+    throw new Error('该视频不含音轨，无法生成旁白/转写');
+  }
+
+  const dir = path.join(STORYBOARD_TMP, String(id).replace(/[^\w.-]/g, '_'));
+  fs.mkdirSync(dir, { recursive: true });
+  const wav = path.join(dir, 'audio.wav');
+
+  try {
+    send(18, '抽取音轨');
+    await runFf('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', file, '-vn', '-ac', '1', '-ar', '16000', wav,
+    ], { timeout: 900_000 });
+
+    const buf = fs.readFileSync(wav);
+    const url = transcriptionEndpoint(String(llmTextBaseUrl).trim());
+    const opts = { url, apiKey: (llmTextApiKey || '').trim(), model: (llmTextModel || '').trim(), language };
+
+    let transcript;
+    if (buf.length <= MAX_AUDIO_BYTES) {
+      send(45, '语音转写中');
+      transcript = await transcribeOnce({ ...opts, audio: buf });
+    } else {
+      const chunks = splitWavChunks(buf, MAX_AUDIO_BYTES);
+      const parts = [];
+      for (let i = 0; i < chunks.length; i++) {
+        send(40 + Math.round(((i + 1) / chunks.length) * 55), `转写分块 ${i + 1}/${chunks.length}`);
+        const text = await transcribeOnce({ ...opts, audio: chunks[i] });
+        if (text) parts.push(text.trim());
+      }
+      transcript = parts.join(' ').replace(/\s+/g, ' ').trim();
+      if (!transcript) throw new Error('转写返回为空（所有分块均无内容）');
+    }
+
+    send(100, '完成');
+    return { ok: true, id, transcript, provider: url, model: opts.model };
+  } finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* 清理失败不影响结果 */
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* 自检                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -1046,6 +1262,16 @@ function registerIpcHandlers(opts = {}) {
     }
   });
 
+  // 完整旁白 / 语音转写（本地抽音轨 + OpenAI 兼容 ASR，长音频自动分块）
+  ipcMain.handle('cineflow:narration', async (event, payload) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    try {
+      return await buildNarration(payload, win);
+    } catch (err) {
+      return { ok: false, error: err && err.message ? err.message : '旁白转写失败' };
+    }
+  });
+
   ipcMain.handle('cineflow:pick-dir', async (_event, payload) => {
     const win = getWindow();
     // 从当前生效目录开始浏览，而不是每次从"文档"这种无关位置起步
@@ -1133,6 +1359,11 @@ module.exports = {
   resolveDownloadDir,
   // Stage 2 分镜逆向（供自测断言）
   buildStoryboard,
+  // 完整旁白 / 语音转写
+  buildNarration,
+  splitWavChunks,
+  transcriptionEndpoint,
+  hasAudioStream,
   probeMedia,
   detectScenes,
   grabFrame,

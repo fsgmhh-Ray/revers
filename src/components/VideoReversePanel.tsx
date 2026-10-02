@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSettings } from '../hooks/useSettings';
 import { cloudNarration, cloudStoryboard, type LlmCfg } from '../services/cloudBridge';
+import { getElectronAPI, localNarration } from '../services/electronBridge';
+import { detectPlatform } from '../utils/platform';
 import { downloadText, safeName, seconds, timecode, toCsv, toMarkdown } from '../utils/storyboard';
 import { IconSparkles } from './Icons';
 
@@ -29,6 +31,15 @@ export function VideoReversePanel() {
   const [narration, setNarration] = useState('');
   const [narrError, setNarrError] = useState('');
 
+  /** 桌面端本地全流程：已下载到本机的视频路径 */
+  const [localPath, setLocalPath] = useState('');
+  const [localPhase, setLocalPhase] = useState<Phase>('idle');
+  const [localError, setLocalError] = useState('');
+  const [localStage, setLocalStage] = useState('');
+
+  const api = getElectronAPI();
+  const desktopReady = Boolean(api);
+
   const llm: LlmCfg = {
     llmBaseUrl: settings.llmBaseUrl,
     llmApiKey: settings.llmApiKey,
@@ -41,7 +52,78 @@ export function VideoReversePanel() {
   // 分镜反推需要「视觉 LLM」；旁白转写需要「文本 LLM」（未填则复用视觉）
   const visionReady = Boolean(settings.llmBaseUrl && settings.llmModel);
   const textReady = Boolean((settings.llmTextBaseUrl && settings.llmTextModel) || visionReady);
-  const busy = phase === 'analyzing' || narrPhase === 'analyzing';
+  const busy = phase === 'analyzing' || narrPhase === 'analyzing' || localPhase === 'analyzing';
+
+  // 桌面端：订阅主进程抽帧/转写进度
+  useEffect(() => {
+    if (!api) return;
+    return api.onStoryboardProgress((event) => {
+      setLocalStage(event.stage || '');
+    });
+  }, [api]);
+
+  /**
+   * 桌面端本地全流程：解析 → 下载到本机 → 本地分镜 → 本地完整旁白。
+   *
+   * 全部走本机 IP，绕开 Pages 墙钟与机房 IP 风控（YouTube bot check 的根治解法）。
+   */
+  const runLocalAll = async () => {
+    if (!api) return;
+    if (!url.trim()) {
+      setLocalError('请先粘贴视频链接');
+      setLocalPhase('error');
+      return;
+    }
+    setLocalPhase('analyzing');
+    setLocalError('');
+    setLocalStage('解析视频信息');
+    try {
+      const platform = detectPlatform(url.trim());
+      const parsed = await api.parse({ url: url.trim(), platform });
+      if (!parsed.ok) throw new Error(parsed.error || '解析失败');
+
+      setLocalStage('下载到本机');
+      const fileName = `${safeName(parsed.data.title || 'video')}.mp4`;
+      const dl = await api.download({
+        id: `rev_${Date.now()}`,
+        url: url.trim(),
+        platform,
+        filename: fileName,
+        sourceUrl: parsed.data.originalUrl,
+      });
+      if (!dl.ok || !dl.path) throw new Error(dl.error || '下载失败，未拿到本地文件');
+
+      setLocalPath(dl.path);
+      setLocalStage('本地抽帧拆解分镜');
+      const sb = await api.storyboard({ id: `sb_${Date.now()}`, path: dl.path, maxShots: 48, frameWidth: 480 });
+      if (!sb || !sb.ok) throw new Error((sb as any)?.error || '本地分镜拆解失败');
+      setResult(sb);
+      setPhase('success');
+
+      // 旁白：同一份本地文件，本地 ffmpeg 抽音轨后送 ASR
+      if (textReady) {
+        setNarrPhase('analyzing');
+        setLocalStage('本地转写旁白');
+        try {
+          const local = await localNarration(dl.path, llm, `nr_${Date.now()}`);
+          if (local?.transcript) {
+            setNarration(local.transcript);
+            setNarrPhase('success');
+          } else {
+            setNarrError('旁白转写返回为空（该视频可能无人声）');
+            setNarrPhase('error');
+          }
+        } catch (err) {
+          setNarrError(err instanceof Error ? err.message : '本地旁白转写失败');
+          setNarrPhase('error');
+        }
+      }
+      setLocalPhase('success');
+    } catch (err) {
+      setLocalPhase('error');
+      setLocalError(err instanceof Error ? err.message : '本地全流程失败');
+    }
+  };
 
   const reverse = async () => {
     if (!url.trim()) {
@@ -87,6 +169,15 @@ export function VideoReversePanel() {
     setNarrPhase('analyzing');
     setNarrError('');
     try {
+      // 桌面端且已下载到本机 → 本地转写（本机 IP，不受 Pages 墙钟 / 机房风控影响）
+      if (desktopReady && localPath) {
+        const local = await localNarration(localPath, llm, `nr_${Date.now()}`);
+        if (local?.transcript) {
+          setNarration(local.transcript);
+          setNarrPhase('success');
+          return;
+        }
+      }
       const data = await cloudNarration(url.trim(), llm);
       if (data?.status === 'error') {
         setNarrPhase('error');
@@ -142,7 +233,37 @@ export function VideoReversePanel() {
             <button className="btn-ghost shrink-0 !py-2.5 !text-[12.5px]" onClick={() => void narrate()} disabled={busy}>
               {narrPhase === 'analyzing' ? '转写中…' : '提取完整旁白'}
             </button>
+            {desktopReady && (
+              <button
+                className="btn-ghost shrink-0 !border-brand/40 !text-brand-soft !py-2.5 !text-[12.5px]"
+                onClick={() => void runLocalAll()}
+                disabled={busy}
+                title="本机 IP 解析+下载+分镜+旁白，全程走你的家宽 IP，绕过机房风控与 Pages 限制"
+              >
+                {localPhase === 'analyzing' ? '本地处理中…' : '⬇ 本地一键全流程'}
+              </button>
+            )}
           </div>
+
+          {desktopReady && (
+            <p className="rounded-xl border border-brand/20 bg-brand/[.05] px-3 py-2 text-[11px] leading-relaxed text-brand-soft/90">
+              <strong className="text-brand-soft">本地一键全流程</strong>：解析 → 下载到本机 → 本地分镜提示词 → 完整旁白，
+              全部走你的家宽 IP（<span className="text-slate-400">YouTube / Instagram 的机房 IP 风控、Pages 10s 墙钟都绕开</span>）。
+              需要先在下方填好「视觉 LLM」与「文本 LLM」。
+              {localStage && <span className="ml-1 text-slate-300">当前：{localStage}</span>}
+            </p>
+          )}
+
+          {localPhase === 'error' && localError && (
+            <p className="rounded-xl border border-rose-500/20 bg-rose-500/[.06] px-3 py-2 text-[11.5px] leading-relaxed text-rose-200">
+              {localError}
+            </p>
+          )}
+          {localPhase === 'success' && localPath && (
+            <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/[.06] px-3 py-2 text-[11px] leading-relaxed text-emerald-200/90">
+              已完成：本地文件 <span className="break-all font-mono">{localPath}</span>
+            </p>
+          )}
 
           {/* LLM 配置（BYOK · 双供应商） */}
           <div className="rounded-xl border border-white/5 bg-white/[.02] p-3">
