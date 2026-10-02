@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   storyboard: (payload) => ipcRenderer.invoke('cineflow:storyboard', payload),
   // 完整旁白 / 语音转写（本地抽音轨 + ASR）
   narration: (payload) => ipcRenderer.invoke('cineflow:narration', payload),
+  // LLM 配置自测（桌面端直连，绕开浏览器 CORS——NVIDIA 不允许浏览器直连）
+  testLlm: (payload) => ipcRenderer.invoke('cineflow:test-llm', payload),
   onStoryboardProgress: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on('cineflow:storyboard-progress', listener);

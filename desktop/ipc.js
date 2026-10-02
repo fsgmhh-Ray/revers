@@ -915,6 +915,77 @@ async function enrichStoryboardWithLLM({ nodes, llm, language, send, maxShots })
 }
 
 /** 调用视觉 LLM（NVIDIA 走强制 JSON；其他端点也尝试 JSON） */
+/**
+ * LLM 配置连通性自测（桌面端直连，不受浏览器 CORS 限制）。
+ *
+ * 为什么必须有这个：NVIDIA 等 API 的 CORS 预检响应里没有
+ * `Access-Control-Allow-Origin`，浏览器直接 fetch 必然 "Failed to fetch"，
+ * 但服务端（桌面端/内核）调用完全正常。所以「测试按钮」在桌面端要走后端通道，
+ * 否则用户会误以为自己的配置有问题。
+ *
+ * kind: 'vision' → 打 /v1/chat/completions（最小文本请求）
+ *       'text'   → 打 /v1/audio/transcriptions（0.2s 静音 WAV）
+ */
+async function testLlmConfig({ kind, baseUrl, apiKey, model }) {
+  const base = String(baseUrl || '').trim();
+  const m = String(model || '').trim();
+  if (!base) return { ok: false, message: '未填 Base URL' };
+  if (!m) return { ok: false, message: '未填 Model' };
+  const endpoint = base.endsWith('/v1') ? base : `${base}/v1`;
+  const started = Date.now();
+  try {
+    if (kind === 'text') {
+      // 44 字节 WAV 头 + 3200 字节静音（0.2s @16k mono）
+      const header = Buffer.alloc(44);
+      header.write('RIFF', 0, 'ascii');
+      header.writeUInt32LE(36 + 3200, 4);
+      header.write('WAVE', 8, 'ascii');
+      header.write('fmt ', 12, 'ascii');
+      header.writeUInt32LE(16, 16);
+      header.writeUInt16LE(1, 20);
+      header.writeUInt16LE(1, 22);
+      header.writeUInt32LE(16000, 24);
+      header.writeUInt32LE(32000, 28);
+      header.writeUInt16LE(2, 32);
+      header.writeUInt16LE(16, 34);
+      header.write('data', 36, 'ascii');
+      header.writeUInt32LE(3200, 40);
+      const audio = Buffer.concat([header, Buffer.alloc(3200)]);
+
+      const form = new FormData();
+      form.append('file', new Blob([audio], { type: 'audio/wav' }), 'probe.wav');
+      form.append('model', m);
+      const res = await fetch(`${endpoint}/audio/transcriptions`, {
+        method: 'POST',
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+        body: form,
+      });
+      const ms = Date.now() - started;
+      if (res.ok) return { ok: true, message: `可用（${ms}ms，探针音频无内容属正常）` };
+      const t = await res.text().catch(() => '');
+      if (res.status === 401 || res.status === 403) return { ok: false, message: 'Key 无效或无权限（401/403）' };
+      if (res.status === 404) return { ok: false, message: '该端点不存在（404）——此供应商可能不支持音频转写' };
+      return { ok: false, message: `HTTP ${res.status}：${t.slice(0, 140)}` };
+    }
+
+    // vision：最小文本请求
+    const res = await fetch(`${endpoint}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+      body: JSON.stringify({ model: m, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
+    });
+    const ms = Date.now() - started;
+    if (res.ok) return { ok: true, message: `可用（${ms}ms）` };
+    const t = await res.text().catch(() => '');
+    if (res.status === 401 || res.status === 403) return { ok: false, message: 'Key 无效或无权限（401/403）' };
+    if (res.status === 404) return { ok: false, message: '端点不存在（404，检查 Base URL 是否含 /v1）' };
+    if (res.status === 429) return { ok: false, message: '速率限制或额度用尽（429）' };
+    return { ok: false, message: `HTTP ${res.status}：${t.slice(0, 140)}` };
+  } catch (err) {
+    return { ok: false, message: `连接失败：${String((err && err.message) || err)}` };
+  }
+}
+
 async function callVisionEndpoint({ endpoint, apiKey, model, frame, language, isNvidia }) {
   const messages = [
     {
@@ -1384,6 +1455,15 @@ function registerIpcHandlers(opts = {}) {
     }
   });
 
+  // LLM 配置自测（桌面端直连，绕开浏览器 CORS）
+  ipcMain.handle('cineflow:test-llm', async (_event, payload) => {
+    try {
+      return await testLlmConfig(payload || {});
+    } catch (err) {
+      return { ok: false, message: String((err && err.message) || err) };
+    }
+  });
+
   ipcMain.handle('cineflow:pick-dir', async (_event, payload) => {
     const win = getWindow();
     // 从当前生效目录开始浏览，而不是每次从"文档"这种无关位置起步
@@ -1473,6 +1553,7 @@ module.exports = {
   buildStoryboard,
   // 完整旁白 / 语音转写
   buildNarration,
+  testLlmConfig,
   splitWavChunks,
   transcriptionEndpoint,
   hasAudioStream,

@@ -114,6 +114,18 @@ export interface ElectronAPI {
     llmTextModel?: string;
     language?: string;
   }): Promise<ElectronNarrationResult>;
+  /**
+   * LLM 配置自测（桌面端直连）。
+   *
+   * NVIDIA 等 API 的 CORS 预检不返回 Access-Control-Allow-Origin，浏览器直接
+   * fetch 必然 "Failed to fetch"，但服务端调用完全正常。因此桌面端必须走后端通道测。
+   */
+  testLlm(payload: {
+    kind: 'vision' | 'text';
+    baseUrl?: string;
+    apiKey?: string;
+    model?: string;
+  }): Promise<{ ok: boolean; message: string }>;
   onStoryboardProgress(handler: (event: StoryboardProgress) => void): () => void;
   onDownloadProgress(handler: ElectronProgressHandler): () => void;
   /** 运营投放（升级 / 广告 / 推广）拉取与订阅 */
