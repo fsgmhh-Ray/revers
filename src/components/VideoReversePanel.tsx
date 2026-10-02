@@ -3,6 +3,8 @@ import { useSettings } from '../hooks/useSettings';
 import { cloudNarration, cloudStoryboard, type LlmCfg } from '../services/cloudBridge';
 import { getElectronAPI, localNarration } from '../services/electronBridge';
 import { detectPlatform } from '../utils/platform';
+import { formatNarration } from '../utils/narration';
+import { probeTextLlm, probeVisionLlm } from '../services/llmProbe';
 import { downloadText, safeName, seconds, timecode, toCsv, toMarkdown } from '../utils/storyboard';
 import { IconSparkles } from './Icons';
 
@@ -30,12 +32,33 @@ export function VideoReversePanel() {
   const [narrPhase, setNarrPhase] = useState<Phase>('idle');
   const [narration, setNarration] = useState('');
   const [narrError, setNarrError] = useState('');
+  const [copied, setCopied] = useState(false);
 
   /** 桌面端本地全流程：已下载到本机的视频路径 */
   const [localPath, setLocalPath] = useState('');
   const [localPhase, setLocalPhase] = useState<Phase>('idle');
   const [localError, setLocalError] = useState('');
   const [localStage, setLocalStage] = useState('');
+
+  /** LLM 配置自检：发真实最小请求验证 base/model/key */
+  const [probeState, setProbeState] = useState<{ vision: string; text: string }>({ vision: '', text: '' });
+  const [probeMsg, setProbeMsg] = useState<{ vision: string; text: string }>({ vision: '', text: '' });
+
+  const testVision = async () => {
+    setProbeState((s) => ({ ...s, vision: 'testing' }));
+    setProbeMsg((s) => ({ ...s, vision: '正在测试视觉 LLM…' }));
+    const r = await probeVisionLlm({ baseUrl: settings.llmBaseUrl, apiKey: settings.llmApiKey, model: settings.llmModel });
+    setProbeState((s) => ({ ...s, vision: r.ok ? 'ok' : 'fail' }));
+    setProbeMsg((s) => ({ ...s, vision: `${r.ok ? '✓' : '✗'} ${r.message}` }));
+  };
+
+  const testText = async () => {
+    setProbeState((s) => ({ ...s, text: 'testing' }));
+    setProbeMsg((s) => ({ ...s, text: '正在测试文本 LLM…' }));
+    const r = await probeTextLlm({ baseUrl: settings.llmTextBaseUrl, apiKey: settings.llmTextApiKey, model: settings.llmTextModel });
+    setProbeState((s) => ({ ...s, text: r.ok ? 'ok' : 'fail' }));
+    setProbeMsg((s) => ({ ...s, text: `${r.ok ? '✓' : '✗'} ${r.message}` }));
+  };
 
   const api = getElectronAPI();
   const desktopReady = Boolean(api);
@@ -52,6 +75,17 @@ export function VideoReversePanel() {
   // 分镜反推需要「视觉 LLM」；旁白转写需要「文本 LLM」（未填则复用视觉）
   const visionReady = Boolean(settings.llmBaseUrl && settings.llmModel);
   const textReady = Boolean((settings.llmTextBaseUrl && settings.llmTextModel) || visionReady);
+  // 缺失项提示：只缺 key 时明确说「缺 Key」，避免用户看到「未配置」却不知道差什么
+  const visionMissing = !settings.llmBaseUrl
+    ? '视觉 LLM 缺 Base URL'
+    : !settings.llmModel
+      ? '视觉 LLM 缺 Model'
+      : '';
+  const textMissing = !settings.llmTextBaseUrl
+    ? '文本 LLM 缺 Base URL'
+    : !settings.llmTextModel
+      ? '文本 LLM 缺 Model'
+      : '';
   const busy = phase === 'analyzing' || narrPhase === 'analyzing' || localPhase === 'analyzing';
 
   // 桌面端：订阅主进程抽帧/转写进度
@@ -211,14 +245,35 @@ export function VideoReversePanel() {
     setNarrPhase('analyzing');
     setNarrError('');
     try {
-      // 桌面端且已下载到本机 → 本地转写（本机 IP，不受 Pages 墙钟 / 机房风控影响）
-      if (desktopReady && localPath) {
-        const local = await localNarration(localPath, llm, `nr_${Date.now()}`);
+      // 桌面端：无论是否已下载过，都走本机 IP（避免云端内核的机房 IP 风控 / Pages 墙钟）
+      if (desktopReady && api) {
+        let target = localPath;
+        if (!target) {
+          setLocalStage('解析并下载到本机');
+          const p = detectPlatform(url.trim());
+          const parsed = await api.parse({ url: url.trim(), platform: p });
+          if (!parsed.ok) throw new Error(parsed.error || '解析失败');
+          const dl = await api.download({
+            id: `rev_narr_${Date.now()}`,
+            url: url.trim(),
+            platform: p,
+            filename: `${safeName(parsed.data.title || 'video')}.mp4`,
+            sourceUrl: parsed.data.originalUrl,
+          });
+          if (!dl.ok || !dl.path) throw new Error(dl.error || '下载失败，未拿到本地文件');
+          target = dl.path;
+          setLocalPath(dl.path);
+        }
+        setLocalStage('本地转写旁白');
+        const local = await localNarration(target, llm, `nr_${Date.now()}`);
         if (local?.transcript) {
-          setNarration(local.transcript);
+          setNarration(formatNarration(local.transcript));
           setNarrPhase('success');
           return;
         }
+        setNarrError('本地转写返回为空（该视频可能无人声）');
+        setNarrPhase('error');
+        return;
       }
       const data = await cloudNarration(url.trim(), llm);
       if (data?.status === 'error') {
@@ -226,7 +281,7 @@ export function VideoReversePanel() {
         setNarrError(data.text || '转写失败');
         return;
       }
-      setNarration(data?.transcript || '');
+      setNarration(formatNarration(data?.transcript || ''));
       setNarrPhase('success');
     } catch (err) {
       setNarrPhase('error');
@@ -318,7 +373,12 @@ export function VideoReversePanel() {
                 {visionReady ? (
                   <span className="ml-2 text-emerald-300/80">视觉已配</span>
                 ) : (
-                  <span className="ml-2 text-amber-300/80">未配置</span>
+                  <span className="ml-2 text-amber-300/80">{visionMissing || '未配置'}</span>
+                )}
+                {textReady ? (
+                  <span className="ml-2 text-emerald-300/80">文本已配</span>
+                ) : (
+                  <span className="ml-2 text-amber-300/80">{textMissing || '文本未配'}</span>
                 )}
               </span>
               <span className="text-[11px] text-slate-500">{showCfg ? '收起' : '展开'}</span>
@@ -326,35 +386,60 @@ export function VideoReversePanel() {
             {showCfg && (
               <div className="mt-2.5 space-y-2.5">
                 <div className="space-y-1.5 rounded-lg border border-brand/15 bg-brand/[.04] p-2.5">
-                  <p className="text-[10.5px] font-medium text-brand-soft">视觉 LLM（分镜反推 · 多模态）</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10.5px] font-medium text-brand-soft">视觉 LLM（分镜反推 · 多模态）</p>
+                    <button
+                      className="btn-ghost !px-2 !py-1 !text-[10.5px]"
+                      disabled={probeState.vision === 'testing'}
+                      onClick={() => void testVision()}
+                      title="发一个最小请求，验证 Base URL / Model / Key 是否真的可用"
+                    >
+                      {probeState.vision === 'testing' ? '测试中…' : '测试'}
+                    </button>
+                  </div>
                   <input
                     className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
-                    placeholder="Base URL（如 https://apihub.agnes-ai.com/v1）"
+                    placeholder="Base URL（如 https://integrate.api.nvidia.com/v1）"
                     value={settings.llmBaseUrl}
                     onChange={(e) => update('llmBaseUrl', e.target.value)}
                   />
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
-                      placeholder="Model（agnes-2.5-flash / gpt-4o-mini）"
+                      placeholder="Model（meta/llama-3.2-90b-vision-instruct）"
                       value={settings.llmModel}
                       onChange={(e) => update('llmModel', e.target.value)}
                     />
                     <input
                       className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
                       type="password"
-                      placeholder="API Key（可留空）"
+                      placeholder="API Key（nvapi-…）"
                       value={settings.llmApiKey}
                       onChange={(e) => update('llmApiKey', e.target.value)}
                     />
                   </div>
+                  {probeMsg.vision && (
+                    <p className={`text-[10.5px] leading-relaxed ${probeState.vision === 'ok' ? 'text-emerald-300/90' : probeState.vision === 'fail' ? 'text-rose-300/90' : 'text-slate-400'}`}>
+                      {probeMsg.vision}
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-1.5 rounded-lg border border-white/10 bg-white/[.02] p-2.5">
-                  <p className="text-[10.5px] font-medium text-slate-300">文本 LLM（旁白转写 · 可选，留空复用视觉）</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10.5px] font-medium text-slate-300">文本 LLM（旁白转写 · Groq whisper）</p>
+                    <button
+                      className="btn-ghost !px-2 !py-1 !text-[10.5px]"
+                      disabled={probeState.text === 'testing'}
+                      onClick={() => void testText()}
+                      title="发一个 0.2 秒静音音频，验证转写端点是否可用"
+                    >
+                      {probeState.text === 'testing' ? '测试中…' : '测试'}
+                    </button>
+                  </div>
                   <input
                     className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
-                    placeholder="Base URL（如 https://api.groq.com/openai/v1）"
+                    placeholder="Base URL（https://api.groq.com/openai/v1）"
                     value={settings.llmTextBaseUrl}
                     onChange={(e) => update('llmTextBaseUrl', e.target.value)}
                   />
@@ -368,21 +453,27 @@ export function VideoReversePanel() {
                     <input
                       className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
                       type="password"
-                      placeholder="API Key（可留空）"
+                      placeholder="API Key（gsk_…）"
                       value={settings.llmTextApiKey}
                       onChange={(e) => update('llmTextApiKey', e.target.value)}
                     />
                   </div>
+                  {probeMsg.text && (
+                    <p className={`text-[10.5px] leading-relaxed ${probeState.text === 'ok' ? 'text-emerald-300/90' : probeState.text === 'fail' ? 'text-rose-300/90' : 'text-slate-400'}`}>
+                      {probeMsg.text}
+                    </p>
+                  )}
                 </div>
 
                 <input
                   className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
-                  placeholder="转写语言（可选，如 zh / en）"
+                  placeholder="转写语言（可选，如 zh / en；留空=自动）"
                   value={settings.llmLanguage}
                   onChange={(e) => update('llmLanguage', e.target.value)}
                 />
                 <p className="text-[10.5px] leading-relaxed text-slate-500">
-                  密钥只存在你本机浏览器（localStorage），随请求直发内核，不落第三方。分镜走 /v1/chat/completions，旁白走 /v1/audio/transcriptions。
+                  配置会<strong className="text-slate-400">自动保存</strong>到本机浏览器（localStorage），随请求直发，不落第三方。
+                  分镜走 /v1/chat/completions，旁白走 /v1/audio/transcriptions。
                 </p>
               </div>
             )}
@@ -487,21 +578,53 @@ export function VideoReversePanel() {
           )}
           {narrPhase === 'success' && narration && (
             <div className="space-y-2 rounded-xl border border-white/5 bg-white/[.02] p-3">
-              <p className="text-[11.5px] font-medium text-slate-300">完整旁白 / 转写</p>
+              <div className="flex items-center justify-between">
+                <p className="text-[11.5px] font-medium text-slate-300">完整旁白 / 转写（已断句分段，可直接编辑）</p>
+                <span className="text-[10.5px] text-slate-500">{narration.length} 字</span>
+              </div>
               <textarea
-                className="h-32 w-full resize-y rounded-lg border border-white/5 bg-black/40 p-2 text-[11.5px] leading-relaxed text-slate-300"
-                readOnly
+                className="h-44 w-full resize-y whitespace-pre-wrap rounded-lg border border-white/5 bg-black/40 p-2.5 text-[12px] leading-7 text-slate-300"
                 value={narration}
+                onChange={(e) => setNarration(e.target.value)}
+                placeholder="转写结果会出现在这里…"
               />
-              <div className="flex gap-2">
-                <button className="btn-ghost !py-1.5 !text-[11.5px]" onClick={() => navigator.clipboard?.writeText(narration)}>
-                  复制
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  className="btn-ghost !py-1.5 !text-[11.5px]"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(narration);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1800);
+                  }}
+                >
+                  {copied ? '已复制 ✓' : '复制全文'}
                 </button>
                 <button
                   className="btn-ghost !py-1.5 !text-[11.5px]"
-                  onClick={() => downloadText(`${baseName}_旁白.txt`, narration, 'text/plain;charset=utf-8')}
+                  onClick={() => {
+                    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+                    downloadText(`旁白_${stamp}.txt`, narration, 'text/plain;charset=utf-8');
+                  }}
                 >
-                  下载
+                  保存为 .txt
+                </button>
+                <button
+                  className="btn-ghost !py-1.5 !text-[11.5px]"
+                  onClick={() => {
+                    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+                    downloadText(`旁白_${stamp}.md`, `# 完整旁白\n\n${narration}\n`, 'text/markdown;charset=utf-8');
+                  }}
+                >
+                  保存为 .md
+                </button>
+                <button
+                  className="btn-ghost !py-1.5 !text-[11.5px]"
+                  onClick={() => {
+                    setNarration('');
+                    setNarrPhase('idle');
+                  }}
+                >
+                  清空
                 </button>
               </div>
             </div>
