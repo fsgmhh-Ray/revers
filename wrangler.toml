@@ -5,10 +5,12 @@ pages_build_output_dir = "dist"
 # 非敏感配置可直接写在这里；敏感项请用 Cloudflare Pages 控制台的 Secrets，
 # 或本地 .dev.vars（已被 .gitignore 忽略）
 [vars]
-# 自建 Cobalt / yt-dlp 解析内核地址（推荐，规避 Cloudflare 出口 IP 被 YT/IG 封禁）
-# COBALT_INSTANCE_URL = "https://parser-core.yourdomain.com"
+# 自建 Cobalt / yt-dlp 解析内核地址（Cloudflare Tunnel → Oracle parser-core）
+# 注意：本文件 [vars] 会与 Pages 控制台的 plain_text 环境变量对账，[vars] 优先；
+# 未写在这里的 plain_text 变量会在重新构建时被移除，故解析内核地址必须写在此处。
+COBALT_INSTANCE_URL = "https://api-reverse.cineflowing.com"
 # Cobalt v10 的 API Key（Authorization: Api-Key xxx）
-# COBALT_API_KEY = ""
+# 敏感项：放在 Pages Secrets，不要写进本文件（构建时不会覆盖 Secret）
 # TikTok 兜底解析源（无需自建即可用）
 TIKWM_API_URL = "https://www.tikwm.com/api/"
 # 所有下载一律由内核代拉（默认已对 YT / IG / 抖音等按域名自动判断）
