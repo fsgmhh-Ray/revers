@@ -17,6 +17,16 @@ function normBase(base) {
   return base.replace(/\/+$/, '');
 }
 
+/**
+ * 拼接 OpenAI 兼容端点路径。
+ * 用户常把 base 填到 /v1（OpenAI 文档惯例，如 https://host/v1），
+ * 也可能只填到 host。两种都兼容，避免拼成 /v1/v1 这种 404。
+ */
+function endpoint(base, path) {
+  const b = normBase(base);
+  return b.endsWith('/v1') ? `${b}${path}` : `${b}/v1${path}`;
+}
+
 function authHeaders(apiKey) {
   return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
 }
@@ -26,7 +36,7 @@ function authHeaders(apiKey) {
  * 不强制 response_format，兼容更多免费端点；由调用方做 JSON 解析。
  */
 export async function callVision({ baseUrl, apiKey, model, frames, system, userText, temperature = 0.4 }) {
-  const url = `${normBase(baseUrl)}/v1/chat/completions`;
+  const url = endpoint(baseUrl, '/chat/completions');
   const imageParts = frames.map((f) => ({
     type: 'image_url',
     image_url: { url: `data:image/jpeg;base64,${f.b64}`, detail: 'auto' },
@@ -45,7 +55,14 @@ export async function callVision({ baseUrl, apiKey, model, frames, system, userT
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(apiKey) },
-    body: JSON.stringify({ model, messages, temperature, max_tokens: 4096 }),
+    // 强制结构化输出，避免模型返回自然语言导致解析失败（主流兼容端点均支持）
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature,
+      max_tokens: 4096,
+      response_format: { type: 'json_object' },
+    }),
   });
 
   if (!res.ok) {
@@ -64,7 +81,7 @@ export async function callVision({ baseUrl, apiKey, model, frames, system, userT
  * （Groq whisper-large-v3 / OpenAI / NVIDIA NIM whisper）。
  */
 export async function transcribe({ baseUrl, apiKey, model, audioPath, language }) {
-  const url = `${normBase(baseUrl)}/v1/audio/transcriptions`;
+  const url = endpoint(baseUrl, '/audio/transcriptions');
   const buf = await readFile(audioPath);
   const file = new File([new Blob([buf])], 'audio.wav', { type: 'audio/wav' });
 
