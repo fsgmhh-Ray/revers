@@ -5,7 +5,9 @@ services:
     container_name: parser-core
     restart: unless-stopped
     ports:
+      # 9000 本体端口；8911 兼容旧隧道入口 api-reverse.cineflowing.com（原 legacy FastAPI 占用，已退役）
       - "9000:9000"
+      - "8911:9000"
     environment:
       PORT: 9000
       # 建议设置一个密钥，并在 Cloudflare Pages 环境变量配置同样的 COBALT_API_KEY

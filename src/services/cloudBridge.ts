@@ -26,6 +26,51 @@ export async function cloudParse(url: string, platform: PlatformType, signal?: A
   return payload.data;
 }
 
+/** 通用 LLM 配置（OpenAI 兼容，BYOK） */
+export interface LlmCfg {
+  llmBaseUrl: string;
+  llmApiKey: string;
+  llmModel: string;
+  llmLanguage?: string;
+}
+
+/** 云端反推分镜：边缘网关 /api/storyboard → parser-core 内核 */
+export async function cloudStoryboard(
+  videoUrl: string,
+  llm: LlmCfg,
+  opts?: { maxShots?: number; threshold?: number; frameWidth?: number },
+): Promise<any> {
+  const res = await fetch('/api/storyboard', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      url: videoUrl,
+      llmBaseUrl: llm.llmBaseUrl,
+      llmApiKey: llm.llmApiKey,
+      llmModel: llm.llmModel,
+      language: llm.llmLanguage,
+      ...opts,
+    }),
+  });
+  return res.json();
+}
+
+/** 完整旁白 / 转写：边缘网关 /api/narration → parser-core 内核 */
+export async function cloudNarration(videoUrl: string, llm: LlmCfg): Promise<any> {
+  const res = await fetch('/api/narration', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      url: videoUrl,
+      llmBaseUrl: llm.llmBaseUrl,
+      llmApiKey: llm.llmApiKey,
+      llmModel: llm.llmModel,
+      language: llm.llmLanguage,
+    }),
+  });
+  return res.json();
+}
+
 export function createCloudEngine(platforms: PlatformType[] = []): Engine {
   const capabilities: EngineCapabilities = {
     kind: 'cloud',

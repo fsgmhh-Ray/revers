@@ -23,6 +23,12 @@ export interface Settings {
   cookieFile: string;
   /** 桌面端下载目录；空字符串 = 用默认目录（下载/Cineflowing） */
   downloadDir: string;
+  /** 云端反推 / 旁白用的通用 LLM（OpenAI 兼容，BYOK，密钥不落第三方） */
+  llmBaseUrl: string;
+  llmApiKey: string;
+  llmModel: string;
+  /** 转写语言（留空=自动），如 zh / en */
+  llmLanguage: string;
 }
 
 const STORAGE_KEY = 'reverse-cineflowing:settings';
@@ -37,6 +43,10 @@ const DEFAULTS: Settings = {
   cookieBrowser: 'auto',
   cookieFile: '',
   downloadDir: '',
+  llmBaseUrl: '',
+  llmApiKey: '',
+  llmModel: '',
+  llmLanguage: '',
 };
 
 function read(): Settings {

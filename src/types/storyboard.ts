@@ -104,3 +104,12 @@ export interface StoryboardOptions {
   /** 关键帧宽度，默认 480 */
   frameWidth?: number;
 }
+
+/** 完整旁白 / 转写结果 */
+export interface NarrationResult {
+  ok: boolean;
+  transcript?: string;
+  provider?: string;
+  model?: string;
+  error?: string;
+}

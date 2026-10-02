@@ -5,6 +5,8 @@ import { proxyUrl } from '../utils/downloader';
 import { platformMeta } from '../utils/platform';
 import { getElectronAPI } from '../services/electronBridge';
 import { downloadText, safeName, seconds, timecode, toCsv, toMarkdown } from '../utils/storyboard';
+import { useSettings } from '../hooks/useSettings';
+import { cloudNarration, cloudStoryboard, type LlmCfg } from '../services/cloudBridge';
 import { IconClose, IconExternal, IconRefresh, IconSparkles } from './Icons';
 
 /**
@@ -32,6 +34,16 @@ export function StoryboardDrawer({
   const [error, setError] = useState('');
   const [threshold, setThreshold] = useState(0.3);
 
+  // 云端反推 / 旁白（BYOK 通用 LLM，无需桌面端）
+  const { settings, update } = useSettings();
+  const [llmBaseUrl, setLlmBaseUrl] = useState(settings.llmBaseUrl);
+  const [llmApiKey, setLlmApiKey] = useState(settings.llmApiKey);
+  const [llmModel, setLlmModel] = useState(settings.llmModel);
+  const [llmLanguage, setLlmLanguage] = useState(settings.llmLanguage);
+  const [narration, setNarration] = useState('');
+  const [narrStatus, setNarrStatus] = useState<'idle' | 'working' | 'done' | 'error'>('idle');
+  const [narrError, setNarrError] = useState('');
+
   const taskId = task?.id;
 
   // 切换任务时清空上一次的拆解结果，避免张冠李戴
@@ -41,6 +53,9 @@ export function StoryboardDrawer({
     setStage('');
     setResult(null);
     setError('');
+    setNarration('');
+    setNarrStatus('idle');
+    setNarrError('');
   }, [taskId]);
 
   // 订阅抽帧进度（主进程逐帧回报）
@@ -98,6 +113,67 @@ export function StoryboardDrawer({
     } catch (err: unknown) {
       setStatus('error');
       setError(err instanceof Error ? err.message : '拆解失败');
+    }
+  };
+
+  const storyboardUrl = task?.inputUrl || task?.data?.downloadUrl || '';
+  const llmCfg: LlmCfg = { llmBaseUrl, llmApiKey, llmModel, llmLanguage };
+
+  const startCloud = async () => {
+    if (!storyboardUrl) {
+      setError('缺少视频链接，请先解析该视频');
+      setStatus('error');
+      return;
+    }
+    if (!llmBaseUrl || !llmModel) {
+      setError('请先填写 LLM Base URL 与 Model（设置已保存到本地，可接 NIM / Groq / DeepSeek / Grok / OpenAI 等兼容端点）');
+      setStatus('error');
+      return;
+    }
+    setStatus('analyzing');
+    setProgress(0);
+    setStage('下载视频并抽帧');
+    setError('');
+    try {
+      const data = await cloudStoryboard(storyboardUrl, llmCfg, { threshold, maxShots: 24, frameWidth: 480 });
+      if (data?.status === 'error') {
+        setStatus('error');
+        setError(data.text || '内核返回错误');
+        return;
+      }
+      setResult(data);
+      setStatus('success');
+    } catch (err) {
+      setStatus('error');
+      setError(err instanceof Error ? err.message : '云端反推失败');
+    }
+  };
+
+  const startNarration = async () => {
+    if (!storyboardUrl) {
+      setNarrError('缺少视频链接，请先解析该视频');
+      setNarrStatus('error');
+      return;
+    }
+    if (!llmBaseUrl || !llmModel) {
+      setNarrError('请先填写 LLM Base URL 与 Model；转写需支持音频的供应商（Groq whisper-large-v3 / OpenAI / NVIDIA NIM）');
+      setNarrStatus('error');
+      return;
+    }
+    setNarrStatus('working');
+    setNarrError('');
+    try {
+      const data = await cloudNarration(storyboardUrl, llmCfg);
+      if (data?.status === 'error') {
+        setNarrStatus('error');
+        setNarrError(data.text || '转写失败');
+        return;
+      }
+      setNarration(data?.transcript || '');
+      setNarrStatus('done');
+    } catch (err) {
+      setNarrStatus('error');
+      setNarrError(err instanceof Error ? err.message : '转写失败');
     }
   };
 
@@ -209,11 +285,99 @@ export function StoryboardDrawer({
               )}
             </div>
 
-            {error && (
-              <div className="mt-3 rounded-xl border border-rose-500/20 bg-rose-500/[.06] p-2.5 text-[11px] leading-relaxed text-rose-200">
-                {error}
+              {/* 云端反推（BYOK，无需桌面端） */}
+              {!desktopReady && (
+                <div className="mt-3 space-y-2 rounded-xl border border-brand/20 bg-brand/[.05] p-3">
+                  <div>
+                    <p className="text-[11.5px] font-medium text-brand-soft">云端反推 · 多模态 LLM（BYOK）</p>
+                    <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-500">
+                      视频在 Oracle 内核完成抽帧，调用你填写的通用 LLM（可接 NIM / Groq / DeepSeek / Grok / OpenAI）。
+                    </p>
+                  </div>
+                  <input
+                    className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                    placeholder="LLM Base URL（如 https://api.groq.com/openai/v1）"
+                    value={llmBaseUrl}
+                    onChange={(e) => { setLlmBaseUrl(e.target.value); update('llmBaseUrl', e.target.value); }}
+                  />
+                  <input
+                    className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                    placeholder="Model（如 gpt-4o-mini / llama-3.1-8b-instant）"
+                    value={llmModel}
+                    onChange={(e) => { setLlmModel(e.target.value); update('llmModel', e.target.value); }}
+                  />
+                  <input
+                    className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                    type="password"
+                    placeholder="API Key（视供应商，可留空）"
+                    value={llmApiKey}
+                    onChange={(e) => { setLlmApiKey(e.target.value); update('llmApiKey', e.target.value); }}
+                  />
+                  <input
+                    className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                    placeholder="转写语言（可选，如 zh / en）"
+                    value={llmLanguage}
+                    onChange={(e) => { setLlmLanguage(e.target.value); update('llmLanguage', e.target.value); }}
+                  />
+                  <button
+                    className="btn-primary flex w-full items-center justify-center gap-1.5 !py-2 !text-[12.5px]"
+                    onClick={() => void startCloud()}
+                    disabled={busy || narrStatus === 'working'}
+                  >
+                    <IconSparkles width={14} height={14} />
+                    {status === 'analyzing' ? '云端反推中…' : '开始云端反推'}
+                  </button>
+                </div>
+              )}
+
+              {/* 完整旁白 / 转写 */}
+              <div className="mt-3 space-y-2 rounded-xl border border-white/5 bg-white/[.02] p-3">
+                <div>
+                  <p className="text-[11.5px] font-medium text-slate-300">完整旁白 / 转写</p>
+                  <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-500">
+                    抽音轨 → 通用 LLM 转写。音频端点需支持转录（Groq whisper-large-v3 / OpenAI / NVIDIA NIM）。
+                  </p>
+                </div>
+                <button
+                  className="btn-ghost w-full !py-2 !text-[12.5px]"
+                  onClick={() => void startNarration()}
+                  disabled={narrStatus === 'working' || busy}
+                >
+                  {narrStatus === 'working' ? '转写中…' : '提取完整旁白'}
+                </button>
+                {narrStatus === 'done' && narration && (
+                  <>
+                    <textarea
+                      className="h-32 w-full resize-y rounded-lg border border-white/5 bg-black/40 p-2 text-[11px] leading-relaxed text-slate-300"
+                      readOnly
+                      value={narration}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        className="btn-ghost !py-1.5 !text-[11.5px]"
+                        onClick={() => navigator.clipboard.writeText(narration)}
+                      >
+                        复制
+                      </button>
+                      <button
+                        className="btn-ghost !py-1.5 !text-[11.5px]"
+                        onClick={() => downloadText(`${safeName(task.data?.title || 'narration')}_旁白.txt`, narration, 'text/plain;charset=utf-8')}
+                      >
+                        下载
+                      </button>
+                    </div>
+                  </>
+                )}
+                {narrStatus === 'error' && narrError && (
+                  <p className="text-[10.5px] leading-relaxed text-rose-300">{narrError}</p>
+                )}
               </div>
-            )}
+
+              {error && (
+                <div className="mt-3 rounded-xl border border-rose-500/20 bg-rose-500/[.06] p-2.5 text-[11px] leading-relaxed text-rose-200">
+                  {error}
+                </div>
+              )}
           </div>
 
           {/* 右：结果 */}
