@@ -33,9 +33,14 @@ export function VideoReversePanel() {
     llmBaseUrl: settings.llmBaseUrl,
     llmApiKey: settings.llmApiKey,
     llmModel: settings.llmModel,
+    llmTextBaseUrl: settings.llmTextBaseUrl,
+    llmTextApiKey: settings.llmTextApiKey,
+    llmTextModel: settings.llmTextModel,
     llmLanguage: settings.llmLanguage,
   };
-  const llmReady = Boolean(settings.llmBaseUrl && settings.llmModel);
+  // 分镜反推需要「视觉 LLM」；旁白转写需要「文本 LLM」（未填则复用视觉）
+  const visionReady = Boolean(settings.llmBaseUrl && settings.llmModel);
+  const textReady = Boolean((settings.llmTextBaseUrl && settings.llmTextModel) || visionReady);
   const busy = phase === 'analyzing' || narrPhase === 'analyzing';
 
   const reverse = async () => {
@@ -44,8 +49,8 @@ export function VideoReversePanel() {
       setPhase('error');
       return;
     }
-    if (!llmReady) {
-      setError('请先展开「LLM 配置」填写 Base URL 与 Model（可接 NVIDIA NIM / Groq / DeepSeek / Grok / OpenAI）');
+    if (!visionReady) {
+      setError('请先展开「LLM 配置」填写视觉 LLM（分镜反推，可接 agnes / NVIDIA NIM / Groq / OpenAI 等）');
       setPhase('error');
       setShowCfg(true);
       return;
@@ -73,8 +78,8 @@ export function VideoReversePanel() {
       setNarrPhase('error');
       return;
     }
-    if (!llmReady) {
-      setNarrError('请先填写 LLM Base URL 与 Model（转写需 Groq whisper-large-v3 / OpenAI / NVIDIA NIM 等支持音频的端点）');
+    if (!textReady) {
+      setNarrError('请先填写文本 LLM（旁白转写，如 Groq whisper-large-v3）；不填则复用视觉 LLM 配置');
       setNarrPhase('error');
       setShowCfg(true);
       return;
@@ -139,16 +144,16 @@ export function VideoReversePanel() {
             </button>
           </div>
 
-          {/* LLM 配置（BYOK） */}
+          {/* LLM 配置（BYOK · 双供应商） */}
           <div className="rounded-xl border border-white/5 bg-white/[.02] p-3">
             <button
               className="flex w-full items-center justify-between text-left"
               onClick={() => setShowCfg((v) => !v)}
             >
               <span className="text-[11.5px] font-medium text-slate-300">
-                LLM 配置（BYOK · OpenAI 兼容）
-                {llmReady ? (
-                  <span className="ml-2 text-emerald-300/80">已配置</span>
+                LLM 配置（BYOK · 视觉 + 文本 双供应商）
+                {visionReady ? (
+                  <span className="ml-2 text-emerald-300/80">视觉已配</span>
                 ) : (
                   <span className="ml-2 text-amber-300/80">未配置</span>
                 )}
@@ -156,34 +161,65 @@ export function VideoReversePanel() {
               <span className="text-[11px] text-slate-500">{showCfg ? '收起' : '展开'}</span>
             </button>
             {showCfg && (
-              <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+              <div className="mt-2.5 space-y-2.5">
+                <div className="space-y-1.5 rounded-lg border border-brand/15 bg-brand/[.04] p-2.5">
+                  <p className="text-[10.5px] font-medium text-brand-soft">视觉 LLM（分镜反推 · 多模态）</p>
+                  <input
+                    className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                    placeholder="Base URL（如 https://apihub.agnes-ai.com/v1）"
+                    value={settings.llmBaseUrl}
+                    onChange={(e) => update('llmBaseUrl', e.target.value)}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                      placeholder="Model（agnes-2.5-flash / gpt-4o-mini）"
+                      value={settings.llmModel}
+                      onChange={(e) => update('llmModel', e.target.value)}
+                    />
+                    <input
+                      className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                      type="password"
+                      placeholder="API Key（可留空）"
+                      value={settings.llmApiKey}
+                      onChange={(e) => update('llmApiKey', e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 rounded-lg border border-white/10 bg-white/[.02] p-2.5">
+                  <p className="text-[10.5px] font-medium text-slate-300">文本 LLM（旁白转写 · 可选，留空复用视觉）</p>
+                  <input
+                    className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                    placeholder="Base URL（如 https://api.groq.com/openai/v1）"
+                    value={settings.llmTextBaseUrl}
+                    onChange={(e) => update('llmTextBaseUrl', e.target.value)}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                      placeholder="Model（whisper-large-v3）"
+                      value={settings.llmTextModel}
+                      onChange={(e) => update('llmTextModel', e.target.value)}
+                    />
+                    <input
+                      className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                      type="password"
+                      placeholder="API Key（可留空）"
+                      value={settings.llmTextApiKey}
+                      onChange={(e) => update('llmTextApiKey', e.target.value)}
+                    />
+                  </div>
+                </div>
+
                 <input
-                  className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
-                  placeholder="Base URL（如 https://integrate.api.nvidia.com/v1）"
-                  value={settings.llmBaseUrl}
-                  onChange={(e) => update('llmBaseUrl', e.target.value)}
-                />
-                <input
-                  className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
-                  placeholder="Model（如 gpt-4o-mini / llama-3.1-8b-instant）"
-                  value={settings.llmModel}
-                  onChange={(e) => update('llmModel', e.target.value)}
-                />
-                <input
-                  className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
-                  type="password"
-                  placeholder="API Key（视供应商，可留空）"
-                  value={settings.llmApiKey}
-                  onChange={(e) => update('llmApiKey', e.target.value)}
-                />
-                <input
-                  className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                  className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
                   placeholder="转写语言（可选，如 zh / en）"
                   value={settings.llmLanguage}
                   onChange={(e) => update('llmLanguage', e.target.value)}
                 />
-                <p className="text-[10.5px] leading-relaxed text-slate-500 sm:col-span-2">
-                  密钥只存在你本机浏览器（localStorage），随请求直发内核，不落第三方。/v1/chat/completions 走反推，/v1/audio/transcriptions 走转写。
+                <p className="text-[10.5px] leading-relaxed text-slate-500">
+                  密钥只存在你本机浏览器（localStorage），随请求直发内核，不落第三方。分镜走 /v1/chat/completions，旁白走 /v1/audio/transcriptions。
                 </p>
               </div>
             )}

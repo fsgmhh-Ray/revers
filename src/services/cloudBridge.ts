@@ -26,15 +26,20 @@ export async function cloudParse(url: string, platform: PlatformType, signal?: A
   return payload.data;
 }
 
-/** 通用 LLM 配置（OpenAI 兼容，BYOK） */
+/** 通用 LLM 配置（OpenAI 兼容，BYOK）。
+ *  llmBaseUrl/llmApiKey/llmModel 为「视觉 LLM（分镜反推）」；
+ *  llmText* 为可选的「文本 LLM（旁白转写）」，不填则内核复用视觉配置。 */
 export interface LlmCfg {
   llmBaseUrl: string;
   llmApiKey: string;
   llmModel: string;
   llmLanguage?: string;
+  llmTextBaseUrl?: string;
+  llmTextApiKey?: string;
+  llmTextModel?: string;
 }
 
-/** 云端反推分镜：边缘网关 /api/storyboard → parser-core 内核 */
+/** 云端反推分镜：边缘网关 /api/storyboard → parser-core 内核（视觉 LLM） */
 export async function cloudStoryboard(
   videoUrl: string,
   llm: LlmCfg,
@@ -48,6 +53,9 @@ export async function cloudStoryboard(
       llmBaseUrl: llm.llmBaseUrl,
       llmApiKey: llm.llmApiKey,
       llmModel: llm.llmModel,
+      llmTextBaseUrl: llm.llmTextBaseUrl,
+      llmTextApiKey: llm.llmTextApiKey,
+      llmTextModel: llm.llmTextModel,
       language: llm.llmLanguage,
       ...opts,
     }),
@@ -55,7 +63,7 @@ export async function cloudStoryboard(
   return res.json();
 }
 
-/** 完整旁白 / 转写：边缘网关 /api/narration → parser-core 内核 */
+/** 完整旁白 / 转写：边缘网关 /api/narration → parser-core 内核（文本 LLM，未填则复用视觉） */
 export async function cloudNarration(videoUrl: string, llm: LlmCfg): Promise<any> {
   const res = await fetch('/api/narration', {
     method: 'POST',
@@ -65,6 +73,9 @@ export async function cloudNarration(videoUrl: string, llm: LlmCfg): Promise<any
       llmBaseUrl: llm.llmBaseUrl,
       llmApiKey: llm.llmApiKey,
       llmModel: llm.llmModel,
+      llmTextBaseUrl: llm.llmTextBaseUrl,
+      llmTextApiKey: llm.llmTextApiKey,
+      llmTextModel: llm.llmTextModel,
       language: llm.llmLanguage,
     }),
   });

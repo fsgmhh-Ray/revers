@@ -310,22 +310,33 @@ export function SettingsPanel({ open, settings, health, engine, onClose, onChang
 
           <section className="mb-6">
             <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-              云端反推 · LLM 配置（BYOK）
+              云端反推 · LLM 配置（BYOK · 双供应商）
             </h3>
             <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
-              用于「视频反推提示词」与「完整旁白」功能。支持任意 OpenAI 兼容端点（NVIDIA NIM / Groq / DeepSeek / Grok / OpenAI）。
-              密钥只存你本机浏览器，不落第三方。
+              分镜反推走「视觉 LLM」（多模态/视频，如 agnes），旁白转写走「文本 LLM」（如 Groq）。
+              两者可填同一家，也可分开——典型搭配：<span className="text-slate-300">agnes 视觉 + Groq 转写</span>。
+              文本留空则自动复用视觉配置。密钥只存你本机浏览器，不落第三方。
             </p>
-            <div className="space-y-2 rounded-xl border border-white/5 bg-white/[.02] p-3">
+
+            {/* 视觉 LLM（分镜反推） */}
+            <div className="space-y-2 rounded-xl border border-brand/20 bg-brand/[.04] p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11.5px] font-medium text-brand-soft">视觉 LLM（分镜反推 · 多模态）</span>
+                {settings.llmBaseUrl && settings.llmModel ? (
+                  <span className="text-[10.5px] text-emerald-300/80">已配置</span>
+                ) : (
+                  <span className="text-[10.5px] text-amber-300/80">未配置</span>
+                )}
+              </div>
               <input
                 className="field w-full !py-1.5 text-[12px]"
-                placeholder="Base URL（如 https://integrate.api.nvidia.com/v1）"
+                placeholder="Base URL（如 https://apihub.agnes-ai.com/v1）"
                 value={settings.llmBaseUrl}
                 onChange={(e) => onChange('llmBaseUrl', e.target.value)}
               />
               <input
                 className="field w-full !py-1.5 text-[12px]"
-                placeholder="Model（如 gpt-4o-mini / llama-3.1-8b-instant）"
+                placeholder="Model（如 agnes-2.5-flash / gpt-4o-mini）"
                 value={settings.llmModel}
                 onChange={(e) => onChange('llmModel', e.target.value)}
               />
@@ -336,16 +347,48 @@ export function SettingsPanel({ open, settings, health, engine, onClose, onChang
                 value={settings.llmApiKey}
                 onChange={(e) => onChange('llmApiKey', e.target.value)}
               />
+            </div>
+
+            {/* 文本 LLM（旁白转写） */}
+            <div className="mt-2 space-y-2 rounded-xl border border-white/5 bg-white/[.02] p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11.5px] font-medium text-slate-300">文本 LLM（旁白转写 · 可选）</span>
+                {settings.llmTextBaseUrl && settings.llmTextModel ? (
+                  <span className="text-[10.5px] text-emerald-300/80">已配置</span>
+                ) : (
+                  <span className="text-[10.5px] text-slate-500">留空=复用视觉</span>
+                )}
+              </div>
               <input
                 className="field w-full !py-1.5 text-[12px]"
-                placeholder="转写语言（可选，如 zh / en）"
-                value={settings.llmLanguage}
-                onChange={(e) => onChange('llmLanguage', e.target.value)}
+                placeholder="Base URL（如 https://api.groq.com/openai/v1）"
+                value={settings.llmTextBaseUrl}
+                onChange={(e) => onChange('llmTextBaseUrl', e.target.value)}
               />
-              <p className="text-[10.5px] leading-relaxed text-slate-500">
-                /v1/chat/completions 走反推，/v1/audio/transcriptions 走转写。填好 Base URL + Model 即可用。
-              </p>
+              <input
+                className="field w-full !py-1.5 text-[12px]"
+                placeholder="Model（如 whisper-large-v3 / llama-3.3-70b-versatile）"
+                value={settings.llmTextModel}
+                onChange={(e) => onChange('llmTextModel', e.target.value)}
+              />
+              <input
+                className="field w-full !py-1.5 text-[12px]"
+                type="password"
+                placeholder="API Key（视供应商，可留空）"
+                value={settings.llmTextApiKey}
+                onChange={(e) => onChange('llmTextApiKey', e.target.value)}
+              />
             </div>
+
+            <input
+              className="field mt-2 w-full !py-1.5 text-[12px]"
+              placeholder="转写语言（可选，如 zh / en）"
+              value={settings.llmLanguage}
+              onChange={(e) => onChange('llmLanguage', e.target.value)}
+            />
+            <p className="mt-1.5 text-[10.5px] leading-relaxed text-slate-500">
+              /v1/chat/completions 走分镜反推，/v1/audio/transcriptions 走旁白转写。填好对应 Base URL + Model 即可用。
+            </p>
           </section>
 
           {desktopReady && (

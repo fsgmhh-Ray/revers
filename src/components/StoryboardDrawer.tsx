@@ -40,6 +40,9 @@ export function StoryboardDrawer({
   const [llmApiKey, setLlmApiKey] = useState(settings.llmApiKey);
   const [llmModel, setLlmModel] = useState(settings.llmModel);
   const [llmLanguage, setLlmLanguage] = useState(settings.llmLanguage);
+  const [llmTextBaseUrl, setLlmTextBaseUrl] = useState(settings.llmTextBaseUrl);
+  const [llmTextApiKey, setLlmTextApiKey] = useState(settings.llmTextApiKey);
+  const [llmTextModel, setLlmTextModel] = useState(settings.llmTextModel);
   const [narration, setNarration] = useState('');
   const [narrStatus, setNarrStatus] = useState<'idle' | 'working' | 'done' | 'error'>('idle');
   const [narrError, setNarrError] = useState('');
@@ -117,7 +120,15 @@ export function StoryboardDrawer({
   };
 
   const storyboardUrl = task?.inputUrl || task?.data?.downloadUrl || '';
-  const llmCfg: LlmCfg = { llmBaseUrl, llmApiKey, llmModel, llmLanguage };
+  const llmCfg: LlmCfg = {
+    llmBaseUrl,
+    llmApiKey,
+    llmModel,
+    llmLanguage,
+    llmTextBaseUrl,
+    llmTextApiKey,
+    llmTextModel,
+  };
 
   const startCloud = async () => {
     if (!storyboardUrl) {
@@ -155,8 +166,8 @@ export function StoryboardDrawer({
       setNarrStatus('error');
       return;
     }
-    if (!llmBaseUrl || !llmModel) {
-      setNarrError('请先填写 LLM Base URL 与 Model；转写需支持音频的供应商（Groq whisper-large-v3 / OpenAI / NVIDIA NIM）');
+    if (!llmTextBaseUrl && !llmTextModel && (!llmBaseUrl || !llmModel)) {
+      setNarrError('请先填写文本 LLM（旁白转写，如 Groq whisper-large-v3）；不填则复用视觉 LLM 配置');
       setNarrStatus('error');
       return;
     }
@@ -290,7 +301,7 @@ export function StoryboardDrawer({
                   <div>
                     <p className="text-[11.5px] font-medium text-brand-soft">云端反推 · 多模态 LLM（BYOK）</p>
                     <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-500">
-                      视频在 Oracle 内核完成抽帧，调用你填写的通用 LLM（可接 NIM / Groq / DeepSeek / Grok / OpenAI）。
+                      视频在 Oracle 内核完成抽帧，调用你填写的视觉 LLM（可接 agnes / NIM / Groq / DeepSeek / Grok / OpenAI）。旁白转写用下方文本 LLM（未填则复用视觉）。
                     </p>
                   </div>
                   <input
@@ -318,6 +329,28 @@ export function StoryboardDrawer({
                     value={llmLanguage}
                     onChange={(e) => { setLlmLanguage(e.target.value); update('llmLanguage', e.target.value); }}
                   />
+                  <p className="pt-1 text-[10.5px] leading-relaxed text-slate-500">
+                    文本 LLM（旁白转写，可选；不填则复用上方视觉配置，如 agnes 视觉 + Groq 转写）。
+                  </p>
+                  <input
+                    className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                    placeholder="文本 Base URL（如 https://api.groq.com/openai/v1）"
+                    value={llmTextBaseUrl}
+                    onChange={(e) => { setLlmTextBaseUrl(e.target.value); update('llmTextBaseUrl', e.target.value); }}
+                  />
+                  <input
+                    className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                    placeholder="文本 Model（如 whisper-large-v3）"
+                    value={llmTextModel}
+                    onChange={(e) => { setLlmTextModel(e.target.value); update('llmTextModel', e.target.value); }}
+                  />
+                  <input
+                    className="w-full rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none focus:border-brand"
+                    type="password"
+                    placeholder="文本 API Key（可留空）"
+                    value={llmTextApiKey}
+                    onChange={(e) => { setLlmTextApiKey(e.target.value); update('llmTextApiKey', e.target.value); }}
+                  />
                   <button
                     className="btn-primary flex w-full items-center justify-center gap-1.5 !py-2 !text-[12.5px]"
                     onClick={() => void startCloud()}
@@ -333,7 +366,7 @@ export function StoryboardDrawer({
                 <div>
                   <p className="text-[11.5px] font-medium text-slate-300">完整旁白 / 转写</p>
                   <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-500">
-                    抽音轨 → 通用 LLM 转写。音频端点需支持转录（Groq whisper-large-v3 / OpenAI / NVIDIA NIM）。
+                    抽音轨 → 文本 LLM 转写（优先下方文本配置，未填则复用视觉）。音频端点需支持转录（Groq whisper-large-v3 / OpenAI / NVIDIA NIM）。
                   </p>
                 </div>
                 <button

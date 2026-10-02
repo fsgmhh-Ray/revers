@@ -5,9 +5,11 @@
  * 部署在独立 VPS 上可规避 Cloudflare / 数据中心 IP 被 YouTube、Instagram 封禁的问题。
  *
  * Stage 2 扩展：
- *   POST /api/storyboard   视频 URL → FFmpeg 场景切分 + 关键帧抽取 → 通用多模态 LLM 填充分镜
- *   POST /api/narration    视频 URL → 抽音轨 → 通用 LLM 转写（完整旁白）
+ *   POST /api/storyboard   视频 URL → FFmpeg 场景切分 + 关键帧抽取 → 多模态 LLM 填充分镜
+ *   POST /api/narration    视频 URL → 抽音轨 → LLM 转写（完整旁白）
  * 两个端点均 BYOK：baseUrl / apiKey / model 通过请求体传入，服务端不落盘密钥。
+ * 支持「双 profile」：视觉 LLM（分镜，多模态/视频，如 agnes）与文本 LLM（旁白转写，如 Groq）
+ * 独立配置；文本未填则复用视觉配置，单配置用户无需填两次。
  *
  * 环境变量：
  *   PORT           默认 9000
@@ -410,12 +412,38 @@ async function buildNarration(videoPath, llm) {
   }
 }
 
-function readLlmCfg(body) {
-  const baseUrl = (body.llmBaseUrl || body.baseUrl || '').trim();
-  const apiKey = (body.llmApiKey || body.apiKey || '').trim();
-  const model = (body.llmModel || body.model || '').trim();
-  if (!baseUrl) throw new Error('缺少 LLM base URL（例如 https://api.groq.com/openai/v1）');
-  if (!model) throw new Error('缺少 LLM model（例如 gpt-4o-mini / whisper-large-v3）');
+/**
+ * 读取 LLM 配置，支持「双 profile」合用多个供应商。
+ *   mode='vision'：反推分镜，只认视觉/通用配置（llmBaseUrl / llmApiKey / llmModel）。
+ *   mode='text'  ：旁白转写，优先用「文本 LLM」独立配置（llmTextBaseUrl / llmTextApiKey / llmTextModel）；
+ *                 未填则回退复用视觉配置（单配置用户无需填两次；如 agnes 视觉 + Groq 文本 即此分法）。
+ */
+function readLlmCfg(body, mode = 'vision') {
+  let baseUrl = '';
+  let apiKey = '';
+  let model = '';
+  if (mode === 'text') {
+    baseUrl = (body.llmTextBaseUrl || '').trim();
+    apiKey = (body.llmTextApiKey || '').trim();
+    model = (body.llmTextModel || '').trim();
+  }
+  if (!baseUrl) {
+    baseUrl = (body.llmBaseUrl || body.baseUrl || '').trim();
+    apiKey = (body.llmApiKey || body.apiKey || apiKey || '').trim();
+    model = (body.llmModel || body.model || model || '').trim();
+  }
+  if (!baseUrl) {
+    const where =
+      mode === 'text'
+        ? '请在设置里填「文本 LLM（旁白转写）」，或不填文本配置以复用「视觉 LLM」'
+        : '请在设置里填「视觉 LLM（分镜反推）」';
+    throw new Error(`缺少 LLM base URL（${where}，例如 https://api.groq.com/openai/v1）`);
+  }
+  if (!model) {
+    throw new Error(
+      '缺少 LLM model（视觉如 gpt-4o-mini / agnes-2.5-flash；文本转写如 whisper-large-v3）',
+    );
+  }
   return { baseUrl, apiKey, model, language: (body.language || '').trim() };
 }
 
@@ -510,8 +538,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   /**
-   * POST /api/storyboard —— 反推分镜
-   * body: { url, llmBaseUrl, llmApiKey, llmModel, maxShots?, threshold?, frameWidth?, language? }
+   * POST /api/storyboard —— 反推分镜（视觉 LLM）
+   * body: { url, llmBaseUrl, llmApiKey, llmModel, maxShots?, threshold?, frameWidth?, language?, llmText*? }
    */
   if (url.pathname === '/api/storyboard') {
     try {
@@ -528,7 +556,7 @@ const server = http.createServer(async (req, res) => {
       if (!target) return json(res, 400, { status: 'error', text: 'url is required' });
       let llm;
       try {
-        llm = readLlmCfg(body);
+        llm = readLlmCfg(body, 'vision');
       } catch (e) {
         return json(res, 400, { status: 'error', text: e.message });
       }
@@ -548,8 +576,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   /**
-   * POST /api/narration —— 完整旁白 / 转写
-   * body: { url, llmBaseUrl, llmApiKey, llmModel, language? }
+   * POST /api/narration —— 完整旁白 / 转写（文本 LLM，优先 llmText*，否则复用视觉配置）
+   * body: { url, llmBaseUrl, llmApiKey, llmModel, llmTextBaseUrl?, llmTextApiKey?, llmTextModel?, language? }
    */
   if (url.pathname === '/api/narration') {
     try {
@@ -566,7 +594,7 @@ const server = http.createServer(async (req, res) => {
       if (!target) return json(res, 400, { status: 'error', text: 'url is required' });
       let llm;
       try {
-        llm = readLlmCfg(body);
+        llm = readLlmCfg(body, 'text');
       } catch (e) {
         return json(res, 400, { status: 'error', text: e.message });
       }

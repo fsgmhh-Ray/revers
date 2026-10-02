@@ -23,10 +23,14 @@ export interface Settings {
   cookieFile: string;
   /** 桌面端下载目录；空字符串 = 用默认目录（下载/Cineflowing） */
   downloadDir: string;
-  /** 云端反推 / 旁白用的通用 LLM（OpenAI 兼容，BYOK，密钥不落第三方） */
+  /** 视觉 LLM（分镜反推）：多模态/视频模型，如 agnes。OpenAI 兼容，BYOK，密钥不落第三方 */
   llmBaseUrl: string;
   llmApiKey: string;
   llmModel: string;
+  /** 文本 LLM（旁白转写）：纯文本/音频转写模型，如 Groq。留空则复用视觉 LLM 配置 */
+  llmTextBaseUrl: string;
+  llmTextApiKey: string;
+  llmTextModel: string;
   /** 转写语言（留空=自动），如 zh / en */
   llmLanguage: string;
 }
@@ -46,6 +50,9 @@ const DEFAULTS: Settings = {
   llmBaseUrl: '',
   llmApiKey: '',
   llmModel: '',
+  llmTextBaseUrl: '',
+  llmTextApiKey: '',
+  llmTextModel: '',
   llmLanguage: '',
 };
 
