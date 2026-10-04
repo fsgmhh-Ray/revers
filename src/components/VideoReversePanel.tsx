@@ -45,6 +45,15 @@ export function VideoReversePanel() {
   /** 本地全流程已耗时（秒），长任务没有计时会让人以为卡死 */
   const [localElapsed, setLocalElapsed] = useState(0);
 
+  /**
+   * 用户手动上传的本地文件（与「下载到本机」的 localPath 分开存）。
+   *
+   * 必须分开：localPath 会残留上一次下载的文件。若直接复用它，用户换了新链接
+   * 却还在分析旧文件——界面上看不出区别，是极难察觉的错误。
+   */
+  const [uploadedPath, setUploadedPath] = useState('');
+  const [uploadedName, setUploadedName] = useState('');
+
   /** LLM 配置自检：发真实最小请求验证 base/model/key */
   const [probeState, setProbeState] = useState<{ vision: string; text: string }>({ vision: '', text: '' });
   const [probeMsg, setProbeMsg] = useState<{ vision: string; text: string }>({ vision: '', text: '' });
@@ -222,9 +231,37 @@ export function VideoReversePanel() {
     }
   };
 
+  /**
+   * 上传本地视频 —— 网络链接解释不了时的兜底入口。
+   *
+   * 风控 / 限区 / 解析源只给静音版 / 站点改版，都会让链接走不通；但用户本地
+   * 往往已经有这个文件。拿到绝对路径后，分镜与旁白全部走本地 ffmpeg，
+   * 不再依赖任何解析源（连 yt-dlp 都不需要）。
+   */
+  const pickLocalFile = async () => {
+    if (!api?.pickFile) {
+      setLocalError('当前桌面端版本不支持上传本地文件，请升级到最新版');
+      setLocalPhase('error');
+      return;
+    }
+    const picked = await api.pickFile();
+    if (!picked?.path) return; // 用户取消，什么都不做
+    setUploadedPath(picked.path);
+    setUploadedName(picked.name || picked.path.split(/[\\/]/).pop() || '本地文件');
+    setLocalPath(picked.path);
+    setLocalDir('');
+    setLocalStage(`已选择本地文件：${picked.name}`);
+    setLocalError('');
+    setLocalPhase('idle');
+    setError('');
+    setNarrError('');
+  };
+
   const reverse = async () => {
-    if (!url.trim()) {
-      setError('请先粘贴视频链接');
+    // 上传过本地文件就直接拿它反推——这正是「链接解释不了」时的兜底路径
+    const localFile = desktopReady ? uploadedPath : '';
+    if (!url.trim() && !localFile) {
+      setError('请先粘贴视频链接，或点「⬆ 上传本地视频」选择本机文件');
       setPhase('error');
       return;
     }
@@ -241,33 +278,38 @@ export function VideoReversePanel() {
       // 桌面端：走本机 IP（解析→下载→本地分镜），避免云端内核的机房 IP 风控
       // 与 Pages 墙钟限制。云端内核对 YouTube 会直接返回 bot check。
       if (desktopReady) {
-        setLocalStage('解析并下载到本机');
-        const platform = detectPlatform(url.trim());
-        const parsed = await api!.parse({ url: url.trim(), platform, ...dlCommon });
-        if (!parsed.ok) throw new Error(parsed.error || '解析失败');
-        const fileName = `${safeName(parsed.data.title || 'video')}.mp4`;
-        const dl = await api!.download({
-          id: `rev_${Date.now()}`,
-          url: url.trim(),
-          platform,
-          filename: fileName,
-          sourceUrl: parsed.data.originalUrl,
-          ...dlCommon,
-        });
-        if (!dl.ok || !dl.path) throw new Error(dl.error || '下载失败，未拿到本地文件');
-        setLocalPath(dl.path);
-        setLocalDir(dl.dir || '');
-        setLocalStage('本地抽帧拆解分镜');
+        // 上传过本地文件就跳过「解析 + 下载」这两步最容易失败的环节
+        let filePath = localFile;
+        if (!filePath) {
+          setLocalStage('解析并下载到本机');
+          const platform = detectPlatform(url.trim());
+          const parsed = await api!.parse({ url: url.trim(), platform, ...dlCommon });
+          if (!parsed.ok) throw new Error(parsed.error || '解析失败');
+          const fileName = `${safeName(parsed.data.title || 'video')}.mp4`;
+          const dl = await api!.download({
+            id: `rev_${Date.now()}`,
+            url: url.trim(),
+            platform,
+            filename: fileName,
+            sourceUrl: parsed.data.originalUrl,
+            ...dlCommon,
+          });
+          if (!dl.ok || !dl.path) throw new Error(dl.error || '下载失败，未拿到本地文件');
+          filePath = dl.path;
+          setLocalPath(dl.path);
+          setLocalDir(dl.dir || '');
+        }
+        setLocalStage(`本地抽帧拆解分镜（${filePath.split(/[\\/]/).pop()}）`);
         const sb = await api!.storyboard({
-        id: `sb_${Date.now()}`,
-        path: dl.path,
-        maxShots: 24,
-        frameWidth: 480,
-        llmBaseUrl: settings.llmBaseUrl,
-        llmApiKey: settings.llmApiKey,
-        llmModel: settings.llmModel,
-        language: settings.llmLanguage,
-      });
+          id: `sb_${Date.now()}`,
+          path: filePath,
+          maxShots: 24,
+          frameWidth: 480,
+          llmBaseUrl: settings.llmBaseUrl,
+          llmApiKey: settings.llmApiKey,
+          llmModel: settings.llmModel,
+          language: settings.llmLanguage,
+        });
         if (!sb || !sb.ok) throw new Error((sb as any)?.error || '本地分镜拆解失败');
         setResult(sb);
         setPhase('success');
@@ -288,8 +330,8 @@ export function VideoReversePanel() {
   };
 
   const narrate = async () => {
-    if (!url.trim()) {
-      setNarrError('请先粘贴视频链接');
+    if (!url.trim() && !(desktopReady && uploadedPath)) {
+      setNarrError('请先粘贴视频链接，或点「⬆ 上传本地视频」选择本机文件');
       setNarrPhase('error');
       return;
     }
@@ -307,21 +349,24 @@ export function VideoReversePanel() {
       if (desktopReady && api) {
         // ① 先试字幕：只要视频有官方/自动字幕，几秒就能拿到，且不用花钱、不会有同音字错。
         //    拿不到才回退到「下载音轨 + ASR」这条慢路（慢一到两个数量级）。
-        setLocalStage('尝试直接取字幕');
-        const subtitleHit = await localNarration(
-          { url: url.trim(), ...dlCommon },
-          llm,
-          `nr_${Date.now()}`,
-        );
-        if (subtitleHit?.transcript) {
-          setNarration(formatNarration(subtitleHit.transcript, { keepTimestamps: true }));
-          setNarrSource(subtitleHit.source === 'subtitle' ? `字幕（${subtitleHit.lang || '自动'}）` : '音频转写');
-          setNarrPhase('success');
-          return;
+        //    纯上传的本地文件没有链接可抓字幕，这一步整个跳过。
+        if (url.trim()) {
+          setLocalStage('尝试直接取字幕');
+          const subtitleHit = await localNarration(
+            { url: url.trim(), ...dlCommon },
+            llm,
+            `nr_${Date.now()}`,
+          );
+          if (subtitleHit?.transcript) {
+            setNarration(formatNarration(subtitleHit.transcript, { keepTimestamps: true }));
+            setNarrSource(subtitleHit.source === 'subtitle' ? `字幕（${subtitleHit.lang || '自动'}）` : '音频转写');
+            setNarrPhase('success');
+            return;
+          }
         }
 
-        // ② 没字幕：下载音轨（30MB 视频里真正用到的只有 5MB）后转写
-        let target = localPath;
+        // ② 没字幕：用本地文件（上传的优先），没有才下载音轨后转写
+        let target = uploadedPath || localPath;
         if (!target) {
           setLocalStage('无字幕，下载音轨到本机');
           const p = detectPlatform(url.trim());
@@ -386,7 +431,7 @@ export function VideoReversePanel() {
         <span className="min-w-0 flex-1">
           <span className="block text-[13.5px] font-semibold text-white">视频反推提示词 · 独立入口</span>
           <span className="block truncate text-[11px] text-slate-400">
-            贴任意视频链接 → 云端内核抽帧 → 多模态 LLM 反推分镜提示词 / 完整旁白（无需安装、无需先解析）
+            贴任意视频链接 → 云端内核抽帧 → 多模态 LLM 反推分镜提示词 / 完整旁白；链接解释不了时可用「上传本地视频」直接反推
           </span>
         </span>
         <span className="chip brand-tonal shrink-0 text-[10.5px]">{open ? '收起' : '展开'}</span>
@@ -410,6 +455,16 @@ export function VideoReversePanel() {
             </button>
             {desktopReady && (
               <button
+                className="btn-ghost shrink-0 !border-emerald-400/40 !text-emerald-200 !py-2.5 !text-[12.5px]"
+                onClick={() => void pickLocalFile()}
+                disabled={busy}
+                title="链接解析不了（风控 / 限区 / 解析源只给静音版）时，直接用本机已有的视频文件反推——全程本地 ffmpeg，不依赖任何解析源"
+              >
+                ⬆ 上传本地视频
+              </button>
+            )}
+            {desktopReady && (
+              <button
                 className="btn-ghost shrink-0 !border-brand/40 !text-brand-soft !py-2.5 !text-[12.5px]"
                 onClick={() => void runLocalAll()}
                 disabled={busy}
@@ -419,6 +474,25 @@ export function VideoReversePanel() {
               </button>
             )}
           </div>
+
+          {uploadedName && (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-emerald-400/25 bg-emerald-400/[.06] px-3 py-2 text-[11px] leading-relaxed text-emerald-100/90">
+              <span>
+                已选本地文件 <strong className="text-emerald-200">{uploadedName}</strong>
+                —— 将直接用它反推，不再解析任何链接。
+              </span>
+              <button
+                className="ml-auto shrink-0 rounded-lg border border-white/10 px-2 py-0.5 text-[10.5px] text-slate-300 hover:bg-white/5"
+                onClick={() => {
+                  setUploadedPath('');
+                  setUploadedName('');
+                  setLocalStage('');
+                }}
+              >
+                清除
+              </button>
+            </div>
+          )}
 
           {desktopReady && (
             <p className="rounded-xl border border-brand/20 bg-brand/[.05] px-3 py-2 text-[11px] leading-relaxed text-brand-soft/90">

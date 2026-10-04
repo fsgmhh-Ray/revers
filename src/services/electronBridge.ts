@@ -51,6 +51,15 @@ export interface CookieFileInfo {
  */
 export type ElectronParseResult = { ok: true; data: VideoMetadata } | { ok: false; error: string };
 
+/** 本地文件选择结果（cineflow:pick-file） */
+export interface ElectronPickedFile {
+  ok: boolean;
+  /** 本机绝对路径——后续分镜 / 旁白直接用它，不再经过任何解析源 */
+  path: string;
+  name: string;
+  size: number;
+}
+
 /** 本地旁白转写结果（与主进程 buildNarration 的返回对应） */
 export type ElectronNarrationResult =
   | {
@@ -100,6 +109,14 @@ export interface ElectronAPI {
   defaultDir(): Promise<{ dir: string; effective: string }>;
   /** 弹出文件框挑选 cookies.txt，取消返回 null */
   pickCookies(): Promise<CookieFileInfo | null>;
+  /**
+   * 弹出文件框选择本地视频/音频（链接解析不了时的兜底入口），取消返回 null。
+   *
+   * 风控 / 限区 / 解析源只给静音版 / 站点改版，都会让链接走不通；
+   * 但用户本地往往已经有这个文件。拿到绝对路径后分镜与旁白全走本地 ffmpeg，
+   * 连 yt-dlp 都不需要。
+   */
+  pickFile(): Promise<ElectronPickedFile | null>;
   /** 校验一个 cookies.txt 路径是否仍然可用 */
   cookieInfo(payload: { path: string }): Promise<CookieFileInfo>;
   /** Stage 2：本地 FFmpeg 分镜逆向 */

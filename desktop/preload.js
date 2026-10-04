@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   reveal: (payload) => ipcRenderer.invoke('cineflow:reveal', payload),
   pickDir: (payload) => ipcRenderer.invoke('cineflow:pick-dir', payload),
   defaultDir: () => ipcRenderer.invoke('cineflow:default-dir'),
+  // 上传本地视频：网络链接解析不了（风控 / 限区 / 静音版）时的兜底入口
+  pickFile: () => ipcRenderer.invoke('cineflow:pick-file'),
   // 登录态：导入浏览器扩展导出的 cookies.txt（Chrome 127+ 无法直接读浏览器数据库）
   pickCookies: () => ipcRenderer.invoke('cineflow:pick-cookies'),
   cookieInfo: (payload) => ipcRenderer.invoke('cineflow:cookie-info', payload),

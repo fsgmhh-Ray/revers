@@ -1486,7 +1486,15 @@ async function transcribeOnce({ url, apiKey, model, language, audio }) {
  * 抓字幕时请求的语言，按偏好顺序排列。
  * 中文优先是因为本项目主要处理中文视频；`en.*` 带通配以接住 en-US / en-orig 等变体。
  */
-const SUBTITLE_LANGS = 'zh-Hans,zh-Hant,zh,en.*';
+/**
+ * 字幕语言过滤。必须同时覆盖两套语言码：
+ *   - YouTube 用 zh-Hans / zh-Hant（ISO 639-1 + script）
+ *   - TikTok 用 cmn-Hans-CN / cmn-Hant-TW、英文是 eng-US（BCP-47，ISO 639-3）
+ * 早期只写 'zh-Hans,zh-Hant,zh,en.*'，TikTok 的 cmn-Hans-CN 一条都匹配不上，
+ * 结果中文影片只能拿到 eng-US 英文字幕（甚至因限流连英文都拿不到 → 掉去 ASR）。
+ * 统一加 .* 前缀匹配，两套码都收。
+ */
+const SUBTITLE_LANGS = 'zh-Hans.*,zh-Hant.*,zh.*,cmn-Hans.*,cmn-Hant.*,cmn.*,en.*';
 /** 字幕抓取超时：实测正常 4 秒左右，留足余量但不让整条链路卡死 */
 const SUBTITLE_TIMEOUT_MS = 60_000;
 
@@ -1528,10 +1536,13 @@ function runYtDlpLoose(args, { timeout = 60_000 } = {}) {
  */
 function subtitleRank(name) {
   const f = String(name).toLowerCase();
-  if (f.includes('zh-hans') || f.includes('zh-cn')) return 0;
-  if (f.includes('zh-hant') || f.includes('zh-tw')) return 1;
-  if (/\.zh\./.test(f) || f.includes('-zh.')) return 2;
-  if (/^subs\.en/.test(f) || f.includes('.en.')) return 3;
+  // cmn-Hans / cmn-Hant 是 TikTok 用的 BCP-47 码，等价于 YouTube 的 zh-Hans / zh-Hant，
+  // 必须给同样的优先级，否则中文影片会被 eng-US 顶掉。
+  if (f.includes('zh-hans') || f.includes('zh-cn') || f.includes('cmn-hans')) return 0;
+  if (f.includes('zh-hant') || f.includes('zh-tw') || f.includes('cmn-hant')) return 1;
+  if (/\.zh\./.test(f) || f.includes('-zh.') || /\bcmn\b/.test(f)) return 2;
+  // eng-US（TikTok）也要算英文档位
+  if (/^subs\.en/.test(f) || f.includes('.en.') || f.includes('.eng')) return 3;
   return 4;
 }
 
@@ -1746,7 +1757,14 @@ async function buildNarration(payload, win) {
 
   send(5, '检测音轨');
   if (!(await hasAudioStream(file))) {
-    throw new Error('该视频不含音轨，无法生成旁白/转写');
+    // 不要只说「不含音轨」——用户会以为是自己影片没声音，实际多半是解析源给了静音版。
+    // 说清两种可能 + 给出可执行的下一步（上传本地文件 / 换源）。
+    throw new Error(
+      '这个文件里没有音轨，无法转写。通常不是影片真的没声音，而是：' +
+        '① 解析源返回了静音版（TikTok / 部分站点常见，网页里默认静音播放就是这个原因）；' +
+        '② 该文件确实无声。' +
+        '建议改用「上传本地视频」直接选本地文件反推，或换一个解析源重试。',
+    );
   }
 
   const dir = path.join(STORYBOARD_TMP, String(id).replace(/[^\w.-]/g, '_'));
@@ -2054,6 +2072,37 @@ function registerIpcHandlers(opts = {}) {
   ipcMain.handle('cineflow:cookie-info', async (_event, payload) => {
     const info = inspectCookieFile(payload && payload.path);
     return { path: (payload && payload.path) || null, ...info };
+  });
+
+  /**
+   * 选择本地视频文件 —— 「网络链接解释不了」时的兜底入口。
+   * 风控 / 限区 / 解析源只给静音版 / 站点改版，都会让链接走不通；
+   * 但用户本地往往已经有这个文件。拿到绝对路径后，分镜与旁白全部走本地 ffmpeg，
+   * 不再依赖任何解析源（yt-dlp 都不需要）。
+   */
+  ipcMain.handle('cineflow:pick-file', async () => {
+    const win = getWindow();
+    const res = await dialog.showOpenDialog(win || undefined, {
+      properties: ['openFile'],
+      filters: [
+        {
+          name: '视频 / 音频文件',
+          extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'flv', 'wmv', 'm4a', 'mp3', 'wav', 'aac'],
+        },
+        { name: '全部文件', extensions: ['*'] },
+      ],
+      title: '选择本地视频文件',
+      buttonLabel: '用这个文件',
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    const picked = res.filePaths[0];
+    let size = 0;
+    try {
+      size = fs.statSync(picked).size;
+    } catch {
+      /* 拿不到体积不影响后续使用 */
+    }
+    return { ok: true, path: picked, name: path.basename(picked), size };
   });
 
   ipcMain.handle('cineflow:feed', async () => {
