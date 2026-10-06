@@ -50,6 +50,14 @@ export const PLATFORM_META: Record<PlatformType, PlatformMeta> = {
     dot: 'bg-amber-400',
     hosts: ['xiaohongshu.com', 'xhslink.com'],
   },
+  kuaishou: {
+    key: 'kuaishou',
+    label: '快手',
+    short: 'KS',
+    badge: 'bg-orange-500/15 text-orange-300 ring-1 ring-orange-500/30',
+    dot: 'bg-orange-400',
+    hosts: ['kuaishou.com', 'ksitem.com', 'gifshow.com'],
+  },
   unknown: {
     key: 'unknown',
     label: '未知平台',
@@ -73,6 +81,7 @@ export function detectPlatform(rawUrl: string): PlatformType {
   if (/youtube\.com|youtu\.be/.test(url)) return 'youtube';
   if (/douyin\.com/.test(url)) return 'douyin';
   if (/xiaohongshu\.com|xhslink\.com/.test(url)) return 'xiaohongshu';
+  if (/kuaishou\.com|ksitem\.com|gifshow\.com/.test(url)) return 'kuaishou';
   return 'unknown';
 }
 

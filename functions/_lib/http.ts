@@ -34,6 +34,7 @@ export function detectPlatform(rawUrl: string): PlatformType {
   if (/youtube\.com|youtu\.be/.test(host)) return 'youtube';
   if (/douyin\.com/.test(host)) return 'douyin';
   if (/xiaohongshu\.com|xhslink\.com/.test(host)) return 'xiaohongshu';
+  if (/kuaishou\.com|ksitem\.com|gifshow\.com/.test(host)) return 'kuaishou';
   return 'unknown';
 }
 

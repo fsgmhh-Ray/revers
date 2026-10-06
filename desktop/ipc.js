@@ -362,6 +362,7 @@ function mapExtractor(key) {
   if (k.includes('tiktok')) return 'tiktok';
   if (k.includes('douyin')) return 'douyin';
   if (k.includes('xiaohongshu')) return 'xiaohongshu';
+  if (k.includes('kuaishou')) return 'kuaishou';
   return 'unknown';
 }
 
@@ -451,7 +452,7 @@ function resolveDownloadDir(preferred) {
 }
 
 function isPlatformUrl(url) {
-  return /tiktok\.com|instagram\.com|youtube\.com|youtu\.be|douyin\.com|xiaohongshu\.com/i.test(url || '');
+  return /tiktok\.com|instagram\.com|youtube\.com|youtu\.be|douyin\.com|xiaohongshu\.com|kuaishou\.com|gifshow\.com/i.test(url || '');
 }
 
 function parseProgress(line) {

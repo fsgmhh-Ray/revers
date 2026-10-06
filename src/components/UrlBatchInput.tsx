@@ -7,6 +7,7 @@ const SAMPLES = [
   'https://www.tiktok.com/@tiktok/video/7106594312292453675',
   'https://www.instagram.com/reel/CxXXXXXxxXX/',
   'https://www.youtube.com/shorts/abcdefghijk',
+  'https://www.kuaishou.com/short-video/3x9abcdefgh',
 ];
 
 export function UrlBatchInput({
@@ -43,7 +44,7 @@ export function UrlBatchInput({
         <div className="flex items-center gap-2">
           <IconLink width={16} height={16} className="text-brand-soft" />
           <h2 className="text-sm font-semibold text-white">批量粘贴链接</h2>
-          <span className="text-[11px] text-slate-500">支持 TikTok / Instagram Reels / YouTube Shorts / 抖音 / 小红书</span>
+          <span className="text-[11px] text-slate-500">支持 TikTok / Instagram Reels / YouTube Shorts / 抖音 / 小红书 / 快手</span>
         </div>
         <button
           className="text-[11px] text-slate-500 hover:text-brand-soft"

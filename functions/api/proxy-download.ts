@@ -28,6 +28,12 @@ const DEFAULT_ALLOWED_HOSTS = [
   'iesdouyin.com',
   'xhscdn.com',
   'xiaohongshu.com',
+  // 快手
+  'kuaishou.com',
+  'kscdn.com',
+  'kwimgs.com',
+  'yximgs.com',
+  'gifshow.com',
   // 自建 / R2 / 演示素材
   'r2.dev',
   'r2.cloudflarestorage.com',
@@ -59,6 +65,12 @@ const ORIGIN_PROXY_HOSTS = [
   'douyinvod.com',
   'iesdouyin.com',
   'xhscdn.com',
+  // 快手：直链绑定出口 IP + 时效签名，必须源站代拉
+  'kuaishou.com',
+  'kscdn.com',
+  'kwimgs.com',
+  'yximgs.com',
+  'gifshow.com',
 ];
 
 function buildReferer(target: URL): string {
@@ -74,6 +86,8 @@ function buildReferer(target: URL): string {
       return 'https://www.douyin.com/';
     case 'xiaohongshu':
       return 'https://www.xiaohongshu.com/';
+    case 'kuaishou':
+      return 'https://www.kuaishou.com/';
     default:
       return `${target.protocol}//${target.hostname}/`;
   }

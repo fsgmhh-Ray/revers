@@ -129,6 +129,7 @@ function buildDownloadHeaders(req: DownloadRequest): Record<string, string> {
   if (req.metadata?.platform === 'instagram') headers.Referer = 'https://www.instagram.com/';
   if (req.metadata?.platform === 'tiktok') headers.Referer = 'https://www.tiktok.com/';
   if (req.metadata?.platform === 'youtube') headers.Referer = 'https://www.youtube.com/';
+  if (req.metadata?.platform === 'kuaishou') headers.Referer = 'https://www.kuaishou.com/';
   return headers;
 }
 

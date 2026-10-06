@@ -1,4 +1,4 @@
-export type PlatformType = 'tiktok' | 'instagram' | 'youtube' | 'douyin' | 'xiaohongshu' | 'unknown';
+export type PlatformType = 'tiktok' | 'instagram' | 'youtube' | 'douyin' | 'xiaohongshu' | 'kuaishou' | 'unknown';
 
 export interface VideoMetadata {
   id: string;
